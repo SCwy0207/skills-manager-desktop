@@ -1,0 +1,47 @@
+[package]
+name = "skills-manager"
+version = "1.0.0"
+description = "Local-first desktop manager for Codex sessions and agent skills"
+authors = ["Victor Kuo"]
+license = "MIT"
+repository = "https://github.com/SCwy0207/skills-manager-desktop"
+homepage = "https://github.com/SCwy0207/skills-manager-desktop"
+edition = "2021"
+readme = "../README.md"
+publish = false
+keywords = ["agent-skills", "desktop", "local-first", "tauri"]
+categories = ["gui"]
+
+[lib]
+name = "skills_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+rusqlite = { version = "0.37", features = ["bundled-full"] }
+walkdir = "2"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+toml_edit = "0.23"
+unicode-normalization = "0.1"
+dirs = "6"
+junction = "1"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+url = "2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["time", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

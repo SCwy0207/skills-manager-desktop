@@ -1,0 +1,166 @@
+:root {
+  --window-titlebar-height: 36px;
+}
+
+/* The supported integration is <WindowTitlebar /> immediately before .app-shell. */
+#root:has(> .window-titlebar) {
+  display: grid;
+  grid-template-rows: var(--window-titlebar-height) minmax(0, 1fr);
+}
+
+#root:has(> .window-titlebar) > .app-shell {
+  min-height: 0;
+  height: 100%;
+}
+
+.window-titlebar {
+  position: relative;
+  z-index: 1000;
+  display: flex;
+  min-width: 0;
+  height: var(--window-titlebar-height);
+  align-items: stretch;
+  color: var(--text-secondary, var(--text, #c5cad0));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent, #8391ff) 5%, transparent), transparent 34%),
+    color-mix(in srgb, var(--bg-sidebar, var(--sidebar, #10141d)) 96%, transparent);
+  border-bottom: 1px solid var(--border-subtle, var(--border, rgba(166, 181, 216, 0.12)));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text-primary, #fff) 2%, transparent);
+  font-family: Inter, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.window-titlebar.is-maximized {
+  border-radius: 0;
+}
+
+.window-titlebar-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  pointer-events: none;
+}
+
+.window-titlebar-appmark {
+  display: grid;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--accent, #8391ff) 22%, transparent);
+}
+
+.window-titlebar-appmark svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.window-titlebar-title {
+  overflow: hidden;
+  color: var(--text-primary, var(--text, #eff1f3));
+  font-size: 11px;
+  font-weight: 630;
+  letter-spacing: -0.005em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-titlebar-edition {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: var(--spectral-cyan, var(--accent-strong, #9aa7ff));
+  background: var(--spectral-cyan-dim, var(--accent-dim, rgba(131, 145, 255, 0.12)));
+  border: 1px solid color-mix(in srgb, var(--spectral-cyan, var(--accent, #8391ff)) 18%, transparent);
+  border-radius: 4px;
+  font: 650 7px/1.2 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.window-titlebar-drag-surface {
+  min-width: 24px;
+  flex: 1;
+}
+
+.window-titlebar-controls {
+  display: flex;
+  flex: 0 0 auto;
+  height: 100%;
+}
+
+.window-titlebar-control {
+  display: grid;
+  width: 46px;
+  height: 100%;
+  min-width: 46px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary, var(--text-soft, #c5cad0));
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  cursor: default;
+  transition: color 90ms ease, background-color 90ms ease;
+}
+
+.window-titlebar-control svg {
+  width: 11px;
+  height: 11px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.window-titlebar-control:hover {
+  color: var(--text-primary, var(--text, #eff1f3));
+  background: var(--bg-hover, var(--surface-hover, rgba(157, 170, 205, 0.09)));
+}
+
+.window-titlebar-control:active {
+  background: color-mix(in srgb, var(--text-primary, #fff) 12%, transparent);
+}
+
+.window-titlebar-control:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--focus-ring, var(--accent, #8391ff));
+  outline-offset: -2px;
+}
+
+.window-titlebar-close:hover,
+.window-titlebar-close:focus-visible {
+  color: #fff;
+  background: #c42b1c;
+}
+
+.window-titlebar-close:active {
+  color: #fff;
+  background: #a92316;
+}
+
+:root[data-theme="light"] .window-titlebar {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+@media (max-width: 850px) {
+  .window-titlebar-edition {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .window-titlebar-control {
+    transition: none;
+  }
+}

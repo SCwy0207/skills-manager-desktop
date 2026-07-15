@@ -1,0 +1,65 @@
+{
+  "name": "skills-manager",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local-first desktop manager for Agent Skills across Codex, Claude Code and Cursor.",
+  "author": "Victor Kuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SCwy0207/skills-manager-desktop.git"
+  },
+  "homepage": "https://github.com/SCwy0207/skills-manager-desktop#readme",
+  "bugs": {
+    "url": "https://github.com/SCwy0207/skills-manager-desktop/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --pretty false",
+    "tauri": "tauri"
+  },
+  "keywords": [
+    "agent-skills",
+    "tauri",
+    "codex",
+    "claude-code",
+    "cursor",
+    "local-first",
+    "desktop"
+  ],
+  "engines": {
+    "node": ">=24",
+    "pnpm": ">=11.7.0"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@tanstack/react-query": "^5.101.2",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.24.0",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "packageManager": "pnpm@11.7.0"
+}

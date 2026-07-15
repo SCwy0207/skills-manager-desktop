@@ -1,0 +1,50 @@
+node_modules/
+dist/
+.pnpm-store/
+.vite/
+coverage/
+.artifacts/
+release-assets/
+*.tsbuildinfo
+src-tauri/target/
+src-tauri/gen/schemas/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local application data
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Signing credentials and private keys
+*.p12
+*.pfx
+*.pem
+*.key
+*.jks
+*.keystore
+*tauri*private*key*
+credentials*.json
+secrets*.json
+
+# Binary release packages stay in GitHub Releases
+*.msi
+*.msix
+*.exe
+*.pdb
+*.dmg
+*.AppImage
+*.deb
+*.rpm

@@ -1,0 +1,86 @@
+.pane-resize-handle {
+  position: relative;
+  z-index: 4;
+  align-self: stretch;
+  width: 9px;
+  min-width: 9px;
+  min-height: 0;
+  margin-inline: -1px;
+  outline: none;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pane-resize-handle::before {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--border-subtle, rgba(148, 163, 184, 0.18));
+  content: "";
+  transform: translateX(-50%);
+  transition:
+    width 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.pane-resize-handle-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--accent-primary, #5eead4);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary, #5eead4) 36%, transparent);
+  opacity: 0;
+  transform: translate(-50%, -50%) scaleY(0.72);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  pointer-events: none;
+}
+
+.pane-resize-handle:hover::before,
+.pane-resize-handle:focus-visible::before,
+.pane-resize-handle[data-dragging="true"]::before {
+  width: 2px;
+  background: var(--accent-primary, #5eead4);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary, #5eead4) 28%, transparent);
+}
+
+.pane-resize-handle:focus-visible .pane-resize-handle-grip,
+.pane-resize-handle[data-dragging="true"] .pane-resize-handle-grip {
+  opacity: 1;
+  transform: translate(-50%, -50%) scaleY(1);
+}
+
+.pane-resize-handle:focus-visible {
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px var(--focus-ring, #5eead4);
+}
+
+@media (forced-colors: active) {
+  .pane-resize-handle::before,
+  .pane-resize-handle-grip {
+    background: ButtonText;
+    box-shadow: none;
+  }
+
+  .pane-resize-handle:focus-visible {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-resize-handle::before,
+  .pane-resize-handle-grip {
+    transition: none;
+  }
+}

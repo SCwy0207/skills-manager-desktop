@@ -29,3 +29,10 @@ All notable changes to Skills Manager are documented here. The project follows S
 - SHA-256 checksum file generated for every GitHub Release.
 - Source code and technical documentation licensed under MIT by Victor Kuo,
   with a separate brand-use notice for the Skills Manager identity assets.
+
+### Fixed (2026-07-15 hotfix refresh)
+
+- Restored reliable custom title-bar closing by granting the Tauri window destroy capability.
+- Added desktop single-instance enforcement; subsequent launches restore and focus the existing window.
+- Added official DeepSeek V4 JSON-mode compatibility and disabled default thinking for the fast path.
+- Added one bounded DeepSeek thinking-mode retry when the fast response is empty or invalid, while accepting only validated final content.

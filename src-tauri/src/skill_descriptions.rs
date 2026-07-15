@@ -1361,25 +1361,26 @@ impl AiDescriptionService {
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]);
-        let mut response_format = CompatibleResponseFormat::JsonSchema;
+        let is_deepseek = is_official_deepseek_endpoint(endpoint);
+        // DeepSeek implements JSON Object output but currently rejects OpenAI's
+        // json_schema response format. Starting in its supported mode avoids an
+        // extra failed request for every generated description.
+        let mut response_format = if is_deepseek {
+            CompatibleResponseFormat::JsonObject
+        } else {
+            CompatibleResponseFormat::JsonSchema
+        };
         let mut fallback_used = false;
+        let mut deepseek_thinking_fallback = false;
         let mut retry_attempt = 0_u32;
         loop {
-            let mut payload = json!({
-                "model": model,
-                "messages": messages.clone(),
-                "stream": false,
-                "max_tokens": 1024,
-            });
-            match response_format {
-                CompatibleResponseFormat::JsonSchema => {
-                    payload["response_format"] = structured_output_schema_for_chat();
-                }
-                CompatibleResponseFormat::JsonObject => {
-                    payload["response_format"] = json!({"type": "json_object"});
-                }
-                CompatibleResponseFormat::Omitted => {}
-            }
+            let payload = compatible_request_payload(
+                model,
+                &messages,
+                response_format,
+                is_deepseek,
+                deepseek_thinking_fallback,
+            );
             let response = self
                 .compatible_request(endpoint, &payload, api_key)
                 .send()
@@ -1388,15 +1389,35 @@ impl AiDescriptionService {
             let status = response.status();
             if status.is_success() {
                 let response = read_json_response(response).await?;
-                let content = extract_chat_completions_text(&response).ok_or_else(|| {
-                    AppError::AiResponseInvalid(
-                        "missing Chat Completions message content".to_owned(),
-                    )
+                let content = extract_chat_completions_text(&response);
+                if content.is_none() && is_deepseek && !deepseek_thinking_fallback {
+                    deepseek_thinking_fallback = true;
+                    retry_attempt = 0;
+                    continue;
+                }
+                let content = content.ok_or_else(|| {
+                    let has_reasoning = response
+                        .pointer("/choices/0/message/reasoning_content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.trim().is_empty());
+                    AppError::AiResponseInvalid(if has_reasoning {
+                        "provider returned reasoning without a final answer; disable thinking mode or increase the output limit".to_owned()
+                    } else {
+                        "missing Chat Completions message content".to_owned()
+                    })
                 })?;
                 let token_count = response
                     .pointer("/usage/total_tokens")
                     .and_then(Value::as_i64);
-                return parse_model_reply(content, token_count);
+                match parse_model_reply(content, token_count) {
+                    Ok(reply) => return Ok(reply),
+                    Err(_) if is_deepseek && !deepseek_thinking_fallback => {
+                        deepseek_thinking_fallback = true;
+                        retry_attempt = 0;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             if matches!(
                 status,
@@ -2067,6 +2088,13 @@ fn normalize_compatible_endpoint(endpoint: &str) -> AppResult<Url> {
     Ok(url)
 }
 
+fn is_official_deepseek_endpoint(endpoint: &str) -> bool {
+    Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.deepseek.com"))
+}
+
 fn append_endpoint_path(endpoint: &Url, path: &str) -> AppResult<Url> {
     let mut url = endpoint.clone();
     url.set_path(path);
@@ -2308,6 +2336,48 @@ fn structured_output_schema_for_responses() -> Value {
     })
 }
 
+fn compatible_request_payload(
+    model: &str,
+    messages: &Value,
+    response_format: CompatibleResponseFormat,
+    is_deepseek: bool,
+    deepseek_thinking_fallback: bool,
+) -> Value {
+    let max_tokens = if deepseek_thinking_fallback {
+        8192
+    } else {
+        1024
+    };
+    let mut payload = json!({
+        "model": model,
+        "messages": messages.clone(),
+        "stream": false,
+        "max_tokens": max_tokens,
+    });
+    if is_deepseek {
+        // DeepSeek V4 defaults to thinking mode. Short structured-output jobs can
+        // otherwise spend the entire output budget in reasoning_content and return
+        // an empty final content field. If the concise pass is invalid, retry once
+        // with a larger thinking budget and still consume only final content.
+        payload["thinking"] = json!({
+            "type": if deepseek_thinking_fallback { "enabled" } else { "disabled" }
+        });
+        if deepseek_thinking_fallback {
+            payload["reasoning_effort"] = json!("high");
+        }
+    }
+    match response_format {
+        CompatibleResponseFormat::JsonSchema => {
+            payload["response_format"] = structured_output_schema_for_chat();
+        }
+        CompatibleResponseFormat::JsonObject => {
+            payload["response_format"] = json!({"type": "json_object"});
+        }
+        CompatibleResponseFormat::Omitted => {}
+    }
+    payload
+}
+
 fn extract_responses_text(response: &Value) -> Option<&str> {
     if let Some(text) = response.get("output_text").and_then(Value::as_str) {
         return Some(text);
@@ -2334,6 +2404,7 @@ fn extract_chat_completions_text(response: &Value) -> Option<&str> {
     if let Some(content) = response
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
+        .filter(|content| !content.trim().is_empty())
     {
         return Some(content);
     }
@@ -2345,6 +2416,7 @@ fn extract_chat_completions_text(response: &Value) -> Option<&str> {
             (part.get("type").and_then(Value::as_str) == Some("text"))
                 .then(|| part.get("text").and_then(Value::as_str))
                 .flatten()
+                .filter(|content| !content.trim().is_empty())
         })
 }
 
@@ -3045,6 +3117,89 @@ mod tests {
                 "{rejected}"
             );
         }
+    }
+
+    #[test]
+    fn deepseek_compatibility_profile_only_matches_the_official_api_host() {
+        for endpoint in [
+            "https://api.deepseek.com/chat/completions",
+            "https://API.DEEPSEEK.COM/v1/chat/completions",
+        ] {
+            assert!(is_official_deepseek_endpoint(endpoint), "{endpoint}");
+        }
+        for endpoint in [
+            "https://deepseek.com/chat/completions",
+            "https://api.deepseek.com.example/chat/completions",
+            "https://gateway.example/v1/chat/completions",
+            "not-a-url",
+        ] {
+            assert!(!is_official_deepseek_endpoint(endpoint), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn deepseek_payload_uses_fast_json_mode_with_a_bounded_thinking_fallback() {
+        let messages = json!([{"role": "user", "content": "fixture"}]);
+        let fast = compatible_request_payload(
+            "deepseek-v4-pro",
+            &messages,
+            CompatibleResponseFormat::JsonObject,
+            true,
+            false,
+        );
+        assert_eq!(fast.pointer("/thinking/type"), Some(&json!("disabled")));
+        assert_eq!(fast.get("max_tokens"), Some(&json!(1024)));
+        assert_eq!(
+            fast.pointer("/response_format/type"),
+            Some(&json!("json_object"))
+        );
+        assert!(fast.get("reasoning_effort").is_none());
+
+        let fallback = compatible_request_payload(
+            "deepseek-v4-pro",
+            &messages,
+            CompatibleResponseFormat::JsonObject,
+            true,
+            true,
+        );
+        assert_eq!(fallback.pointer("/thinking/type"), Some(&json!("enabled")));
+        assert_eq!(fallback.get("max_tokens"), Some(&json!(8192)));
+        assert_eq!(fallback.get("reasoning_effort"), Some(&json!("high")));
+
+        let generic = compatible_request_payload(
+            "fixture-model",
+            &messages,
+            CompatibleResponseFormat::JsonSchema,
+            false,
+            false,
+        );
+        assert!(generic.get("thinking").is_none());
+        assert_eq!(
+            generic.pointer("/response_format/type"),
+            Some(&json!("json_schema"))
+        );
+    }
+
+    #[test]
+    fn reasoning_only_chat_completion_is_not_treated_as_final_output() {
+        let reasoning_only = json!({
+            "choices": [{
+                "finish_reason": "length",
+                "message": {"content": "", "reasoning_content": "internal reasoning"}
+            }]
+        });
+        assert_eq!(extract_chat_completions_text(&reasoning_only), None);
+
+        let completed = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": "{\"description\":\"用于生成中文技能简介并保留原始说明。\",\"detectedLanguage\":\"en\"}",
+                    "reasoning_content": ""
+                }
+            }]
+        });
+        assert!(extract_chat_completions_text(&completed).is_some());
     }
 
     #[test]

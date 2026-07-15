@@ -3080,6 +3080,8 @@ mark {
   text-transform: uppercase;
 }
 
+/* Custom Skills workspace styles live with the semantic theme tokens in aesthetic-v2.css. */
+
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
   .workspace-split { grid-template-columns: 355px minmax(0, 1fr); }

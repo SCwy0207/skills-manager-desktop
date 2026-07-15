@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -575,11 +575,13 @@ export function SettingsView({
   loading = false,
   error,
   onRetry,
+  customSkillsSection,
 }: {
   capabilities?: CapabilityInfo;
   loading?: boolean;
   error?: unknown;
   onRetry?: () => void;
+  customSkillsSection?: ReactNode;
 }) {
   const { locale, setLocale, t } = useI18n();
   const unknownLabel = loading
@@ -643,6 +645,7 @@ export function SettingsView({
           </div>
         </section>
         <AiDescriptionSettingsSection />
+        {customSkillsSection}
         <section className="settings-section">
           <h2>{t("settings.environment.title")}</h2>
           <div className="settings-card">

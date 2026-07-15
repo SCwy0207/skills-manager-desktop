@@ -63,6 +63,14 @@ fn apply_migrations(connection: &mut Connection) -> AppResult<()> {
             "0004_openai_compatible_provider",
             include_str!("../migrations/0004_openai_compatible_provider.sql"),
         ),
+        (
+            "0005_custom_skills",
+            include_str!("../migrations/0005_custom_skills.sql"),
+        ),
+        (
+            "0006_multi_agent_sessions",
+            include_str!("../migrations/0006_multi_agent_sessions.sql"),
+        ),
     ];
     for (version, sql) in MIGRATIONS {
         let applied = connection

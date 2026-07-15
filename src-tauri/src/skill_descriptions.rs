@@ -1569,6 +1569,134 @@ impl AiDescriptionService {
     }
 }
 
+impl AiDescriptionService {
+    /// Run a bounded JSON-only completion for first-party features that share
+    /// the configured provider. Callers must validate the returned JSON before
+    /// using it as instructions or writing it to disk.
+    pub async fn complete_json(
+        &self,
+        database: &Database,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> AppResult<String> {
+        let settings = get_settings(database)?;
+        ensure_generation_configured(&settings)?;
+        let provider = settings.provider.as_str();
+        let model = match provider {
+            "local" => settings
+                .local_model
+                .as_deref()
+                .ok_or_else(|| AppError::AiNotConfigured("select a local model".to_owned()))?,
+            "compatible" => settings.compatible_model.as_str(),
+            _ => settings.openai_model.as_str(),
+        };
+        let model = validate_model(model)?;
+        let messages = json!([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]);
+        let response = match provider {
+            "local" => {
+                let _permit = self.local_generation_slots.acquire().await.map_err(|_| {
+                    AppError::Internal("local AI concurrency gate closed".to_owned())
+                })?;
+                let endpoint = validate_local_endpoint(&settings.local_endpoint)?;
+                let url = append_endpoint_path(&endpoint, "/v1/chat/completions")?;
+                self.local_client
+                    .post(url)
+                    .json(&json!({
+                        "model": model,
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "stream": false,
+                        "max_tokens": 4096
+                    }))
+                    .send()
+                    .await
+                    .map_err(map_reqwest_error)?
+            }
+            "compatible" => {
+                let _permit = self.remote_generation_slots.acquire().await.map_err(|_| {
+                    AppError::Internal("remote AI concurrency gate closed".to_owned())
+                })?;
+                let endpoint = normalize_compatible_endpoint(&settings.compatible_base_url)?;
+                let key = load_compatible_secret()?.ok_or_else(|| {
+                    AppError::AiNotConfigured("an OpenAI-compatible API key is required".to_owned())
+                })?;
+                self.remote_client
+                    .post(endpoint)
+                    .bearer_auth(key)
+                    .json(&json!({
+                        "model": model,
+                        "messages": messages,
+                        "temperature": 0.1,
+                        "stream": false,
+                        "max_tokens": 4096
+                    }))
+                    .send()
+                    .await
+                    .map_err(map_reqwest_error)?
+            }
+            _ => {
+                let _permit = self.remote_generation_slots.acquire().await.map_err(|_| {
+                    AppError::Internal("remote AI concurrency gate closed".to_owned())
+                })?;
+                let key = load_openai_secret()?.ok_or_else(|| {
+                    AppError::AiNotConfigured("an OpenAI API key is required".to_owned())
+                })?;
+                self.remote_client
+                    .post(OPENAI_RESPONSES_ENDPOINT)
+                    .bearer_auth(key)
+                    .json(&json!({
+                        "model": model,
+                        "store": false,
+                        "input": [
+                            {"role": "developer", "content": [{"type": "input_text", "text": system_prompt}]},
+                            {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]}
+                        ],
+                        "max_output_tokens": 4096
+                    }))
+                    .send()
+                    .await
+                    .map_err(map_reqwest_error)?
+            }
+        };
+        let status = response.status();
+        if response.status().is_redirection() {
+            return Err(AppError::AiOffline("redirects are not allowed".to_owned()));
+        }
+        if !status.is_success() {
+            let body = read_response_bytes(response).await.unwrap_or_default();
+            return Err(map_provider_error_response(
+                status,
+                &body,
+                None,
+                system_prompt,
+                user_prompt,
+            ));
+        }
+        let value = read_json_response(response).await?;
+        let content = if provider == "openai" {
+            extract_responses_text(&value)
+        } else {
+            extract_chat_completions_text(&value)
+        }
+        .ok_or_else(|| AppError::AiResponseInvalid("missing JSON completion content".to_owned()))?;
+        let content = content
+            .trim()
+            .strip_prefix("```json")
+            .or_else(|| content.trim().strip_prefix("```"))
+            .unwrap_or(content.trim())
+            .strip_suffix("```")
+            .unwrap_or(content.trim())
+            .trim();
+        serde_json::from_str::<Value>(content).map_err(|_| {
+            AppError::AiResponseInvalid("AI completion did not return valid JSON".to_owned())
+        })?;
+        Ok(content.to_owned())
+    }
+}
+
 fn ensure_generation_configured(settings: &AiDescriptionSettings) -> AppResult<()> {
     if !settings.enabled {
         return Err(AppError::AiNotConfigured(

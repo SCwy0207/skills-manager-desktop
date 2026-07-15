@@ -1,6 +1,9 @@
+mod codex_catalog;
 mod commands;
+mod custom_skills;
 mod db;
 mod error;
+mod external_sessions;
 mod managed;
 mod models;
 mod security;
@@ -43,6 +46,7 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
             managed::recover_interrupted_operations(&database, &app_data_dir)
                 .map_err(|error| error.to_string())?;
+            custom_skills::bootstrap(&database).map_err(|error| error.to_string())?;
             app.manage(AppState {
                 database,
                 app_data_dir,
@@ -59,6 +63,7 @@ pub fn run() {
             commands::index_sessions,
             commands::search_sessions,
             commands::get_session,
+            commands::rename_session,
             commands::scan_skills,
             commands::scan_skill_security,
             commands::get_skill_security_scan,
@@ -80,6 +85,17 @@ pub fn run() {
             commands::start_skill_description_job,
             commands::get_skill_description_job,
             commands::cancel_skill_description_job,
+            commands::get_custom_skills_settings,
+            commands::update_custom_skills_settings,
+            commands::list_openapi_search_profiles,
+            commands::save_openapi_search_profile,
+            commands::start_custom_skill_run,
+            commands::answer_custom_skill_question,
+            commands::generate_custom_skill,
+            commands::validate_custom_skill_run,
+            commands::save_custom_skill,
+            commands::get_custom_skill_run,
+            commands::repair_custom_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");

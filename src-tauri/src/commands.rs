@@ -6,15 +6,21 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::{
+    custom_skills,
     error::{AppError, AppResult},
     managed,
     models::{
-        AiDescriptionSettings, AuditLogEntry, CapabilityInfo, ClearSkillDescriptionRequest,
-        GenerateSkillDescriptionRequest, ImportSkillRequest, ImportSkillResult, LocalAiProvider,
-        Project, ProviderTestResult, SessionDetail, SessionSearchRequest, SessionSummary,
-        SetManualSkillDescriptionRequest, SkillDescriptionJob, SkillDescriptionLocalization,
-        SkillDetail, SkillScanRequest, SkillSummary, StartSkillDescriptionJobRequest,
-        UpdateAiDescriptionSettingsRequest, WriteSkillFileRequest, WriteSkillFileResult,
+        AiDescriptionSettings, AnswerCustomSkillQuestionRequest, AuditLogEntry, CapabilityInfo,
+        ClearSkillDescriptionRequest, CustomSkillRun, CustomSkillsSettings,
+        GenerateCustomSkillRequest, GenerateSkillDescriptionRequest, ImportSkillRequest,
+        ImportSkillResult, LocalAiProvider, OpenApiSearchProfile, Project, ProviderTestResult,
+        RenameSessionRequest, RepairCustomSkillsRequest, RepairCustomSkillsResult,
+        SaveCustomSkillRequest, SaveCustomSkillResult, SaveOpenApiSearchProfileRequest,
+        SessionDetail, SessionSearchRequest, SessionSummary, SetManualSkillDescriptionRequest,
+        SkillDescriptionJob, SkillDescriptionLocalization, SkillDetail, SkillScanRequest,
+        SkillSummary, StartCustomSkillRunRequest, StartSkillDescriptionJobRequest,
+        UpdateAiDescriptionSettingsRequest, UpdateCustomSkillsSettingsRequest,
+        WriteSkillFileRequest, WriteSkillFileResult,
     },
     security, sessions, skill_descriptions, skills, AppState,
 };
@@ -151,7 +157,7 @@ pub fn remove_project(id: String, state: State<'_, AppState>) -> AppResult<()> {
 pub async fn index_sessions(state: State<'_, AppState>) -> AppResult<usize> {
     let database = state.database.clone();
     run_blocking(move || {
-        let changed = sessions::index_codex_sessions(&database)?;
+        let changed = sessions::index_local_sessions(&database)?;
         append_audit(
             &database,
             "SESSION_INDEX",
@@ -159,6 +165,25 @@ pub async fn index_sessions(state: State<'_, AppState>) -> AppResult<usize> {
             serde_json::json!({"changed": changed}),
         )?;
         Ok(changed)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_session(
+    request: RenameSessionRequest,
+    state: State<'_, AppState>,
+) -> AppResult<SessionSummary> {
+    let database = state.database.clone();
+    run_blocking(move || {
+        let summary = sessions::rename_session(&database, &request.id, &request.title)?;
+        append_audit(
+            &database,
+            "SESSION_RENAME",
+            Some(&request.id),
+            serde_json::json!({"agent": summary.agent_type, "titleLength": request.title.chars().count()}),
+        )?;
+        Ok(summary)
     })
     .await
 }
@@ -430,4 +455,87 @@ pub fn cancel_skill_description_job(
     state: State<'_, AppState>,
 ) -> AppResult<SkillDescriptionJob> {
     state.ai_descriptions.cancel_job(&job_id)
+}
+
+#[tauri::command]
+pub fn get_custom_skills_settings(state: State<'_, AppState>) -> AppResult<CustomSkillsSettings> {
+    custom_skills::get_settings(&state.database)
+}
+
+#[tauri::command]
+pub fn update_custom_skills_settings(
+    request: UpdateCustomSkillsSettingsRequest,
+    state: State<'_, AppState>,
+) -> AppResult<CustomSkillsSettings> {
+    custom_skills::update_settings(&state.database, &request)
+}
+
+#[tauri::command]
+pub fn list_openapi_search_profiles(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<OpenApiSearchProfile>> {
+    custom_skills::list_search_profiles(&state.database)
+}
+
+#[tauri::command]
+pub fn save_openapi_search_profile(
+    request: SaveOpenApiSearchProfileRequest,
+    state: State<'_, AppState>,
+) -> AppResult<OpenApiSearchProfile> {
+    custom_skills::save_search_profile(&state.database, &request)
+}
+
+#[tauri::command]
+pub async fn start_custom_skill_run(
+    request: StartCustomSkillRunRequest,
+    state: State<'_, AppState>,
+) -> AppResult<CustomSkillRun> {
+    custom_skills::start_run(&state.database, &request).await
+}
+
+#[tauri::command]
+pub fn answer_custom_skill_question(
+    request: AnswerCustomSkillQuestionRequest,
+    state: State<'_, AppState>,
+) -> AppResult<CustomSkillRun> {
+    custom_skills::answer_question(&state.database, &request)
+}
+
+#[tauri::command]
+pub async fn generate_custom_skill(
+    request: GenerateCustomSkillRequest,
+    state: State<'_, AppState>,
+) -> AppResult<CustomSkillRun> {
+    custom_skills::generate_run(&state.database, &state.ai_descriptions, &request).await
+}
+
+#[tauri::command]
+pub async fn validate_custom_skill_run(
+    run_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<CustomSkillRun> {
+    custom_skills::validate_run(&state.database, &state.ai_descriptions, &run_id).await
+}
+
+#[tauri::command]
+pub async fn save_custom_skill(
+    request: SaveCustomSkillRequest,
+    state: State<'_, AppState>,
+) -> AppResult<SaveCustomSkillResult> {
+    let database = state.database.clone();
+    run_blocking(move || custom_skills::save_run(&database, &request)).await
+}
+
+#[tauri::command]
+pub fn get_custom_skill_run(id: String, state: State<'_, AppState>) -> AppResult<CustomSkillRun> {
+    custom_skills::get_run(&state.database, &id)
+}
+
+#[tauri::command]
+pub async fn repair_custom_skills(
+    request: RepairCustomSkillsRequest,
+    state: State<'_, AppState>,
+) -> AppResult<RepairCustomSkillsResult> {
+    let database = state.database.clone();
+    run_blocking(move || custom_skills::repair(&database, &request)).await
 }

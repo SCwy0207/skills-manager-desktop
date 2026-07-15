@@ -25,6 +25,10 @@ const DEFAULT_RESULT_LIMIT: u32 = 50;
 const MAX_RESULT_LIMIT: u32 = 200;
 const PREVIEW_CHAR_LIMIT: usize = 240;
 const PREVIEW_CONTEXT_BEFORE: usize = 72;
+// Bump whenever parsing or candidate-selection rules change. Existing rollout
+// files are immutable often enough that file timestamps alone cannot tell us
+// a row needs to be rebuilt after improving the indexer.
+const SESSION_INDEX_FORMAT_VERSION: u32 = 4;
 
 #[derive(Debug)]
 struct FileCandidate {
@@ -41,12 +45,23 @@ struct FileFingerprint {
 }
 
 #[derive(Debug)]
+struct SessionFileIdentity {
+    session_id: String,
+    thread_source: Option<String>,
+}
+
+#[derive(Debug)]
 struct IndexedSession {
     session_id: String,
+    native_session_id: String,
+    native_store_path: String,
     title: String,
+    title_origin: &'static str,
+    can_rename: bool,
     content: String,
     file_path: String,
     cwd: Option<String>,
+    source_kind: &'static str,
     created_at: i64,
     updated_at: i64,
     archived: bool,
@@ -81,6 +96,8 @@ struct StoredSession {
     updated_at: i64,
     archived: bool,
     source_kind: String,
+    title_origin: String,
+    can_rename: bool,
 }
 
 /// Incrementally indexes the Codex session directories under `CODEX_HOME` (or
@@ -94,6 +111,140 @@ pub fn index_codex_sessions(database: &Database) -> AppResult<usize> {
     index_codex_sessions_in(database, &codex_home)
 }
 
+/// Refreshes every supported local Agent session source. An absent Claude or
+/// Cursor store is a healthy empty source; malformed/private schema variants
+/// are isolated by their adapters and never hide valid Codex sessions.
+pub fn index_local_sessions(database: &Database) -> AppResult<usize> {
+    let mut changed = index_codex_sessions(database)?;
+    let external = crate::external_sessions::scan_external_sessions()?;
+    changed += persist_external_sessions(database, external)?;
+    Ok(changed)
+}
+
+fn persist_external_sessions(
+    database: &Database,
+    scan: crate::external_sessions::AdapterScan,
+) -> AppResult<usize> {
+    database.with_connection(|connection| {
+        let transaction = connection.unchecked_transaction()?;
+        let indexed_at = chrono::Utc::now().timestamp();
+        let mut changed = 0usize;
+        let mut seen = HashMap::<String, HashSet<String>>::new();
+
+        for session in &scan.sessions {
+            seen.entry(session.source_kind.clone())
+                .or_default()
+                .insert(session.session_id.clone());
+            let unchanged = transaction
+                .query_row(
+                    "SELECT content_hash, title, file_path, source_kind, native_session_id,
+                            native_store_path, cwd, title_origin, can_rename, created_at, updated_at,
+                            is_archived, file_size, parse_status, parse_error, metadata_json
+                     FROM sessions WHERE session_id = ?1",
+                    [&session.session_id],
+                    |row| {
+                        Ok(
+                            row.get::<_, String>(0)? == session.content_hash
+                                && row.get::<_, String>(1)? == session.title
+                                && row.get::<_, String>(2)? == session.file_path
+                                && row.get::<_, String>(3)? == session.source_kind
+                                && row.get::<_, Option<String>>(4)?.as_deref()
+                                    == Some(session.native_session_id.as_str())
+                                && row.get::<_, Option<String>>(5)?.as_deref()
+                                    == Some(session.native_store_path.as_str())
+                                && row.get::<_, Option<String>>(6)? == session.cwd
+                                && row.get::<_, String>(7)? == session.title_origin
+                                && (row.get::<_, i64>(8)? != 0) == session.can_rename
+                                && row.get::<_, i64>(9)? == session.created_at
+                                && row.get::<_, i64>(10)? == session.updated_at
+                                && (row.get::<_, i64>(11)? != 0) == session.archived
+                                && row.get::<_, i64>(12)? == session.file_size
+                                && row.get::<_, String>(13)? == session.parse_status
+                                && row.get::<_, Option<String>>(14)? == session.parse_error
+                                && row.get::<_, String>(15)? == session.metadata_json,
+                        )
+                    },
+                )
+                .optional()?
+                .unwrap_or(false);
+            if unchanged {
+                continue;
+            }
+
+            transaction.execute(
+                "INSERT INTO sessions (
+                    session_id, title, content, file_path, cwd, source_kind, native_session_id,
+                    native_store_path, title_origin, can_rename, created_at, updated_at, is_archived, content_hash,
+                    file_size, parse_status, parse_error, metadata_json, indexed_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                    title = excluded.title,
+                    content = excluded.content,
+                    file_path = excluded.file_path,
+                    cwd = excluded.cwd,
+                    source_kind = excluded.source_kind,
+                    native_session_id = excluded.native_session_id,
+                    native_store_path = excluded.native_store_path,
+                    title_origin = excluded.title_origin,
+                    can_rename = excluded.can_rename,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    is_archived = excluded.is_archived,
+                    content_hash = excluded.content_hash,
+                    file_size = excluded.file_size,
+                    parse_status = excluded.parse_status,
+                    parse_error = excluded.parse_error,
+                    metadata_json = excluded.metadata_json,
+                    indexed_at = excluded.indexed_at",
+                params![
+                    &session.session_id,
+                    &session.title,
+                    &session.content,
+                    &session.file_path,
+                    &session.cwd,
+                    &session.source_kind,
+                    &session.native_session_id,
+                    &session.native_store_path,
+                    &session.title_origin,
+                    session.can_rename as i64,
+                    session.created_at,
+                    session.updated_at,
+                    session.archived as i64,
+                    &session.content_hash,
+                    session.file_size,
+                    &session.parse_status,
+                    &session.parse_error,
+                    &session.metadata_json,
+                    indexed_at,
+                ],
+            )?;
+            changed += 1;
+        }
+
+        for source in scan.completed_sources {
+            let current = seen.remove(&source).unwrap_or_default();
+            let mut statement = transaction
+                .prepare("SELECT session_id FROM sessions WHERE source_kind = ?1")?;
+            let stale = statement
+                .query_map([&source], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|id| !current.contains(id))
+                .collect::<Vec<_>>();
+            drop(statement);
+            for id in stale {
+                changed += transaction.execute(
+                    "DELETE FROM sessions WHERE session_id = ?1 AND source_kind = ?2",
+                    params![id, source],
+                )?;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(changed)
+    })
+}
+
 fn index_codex_sessions_in(database: &Database, codex_home: &Path) -> AppResult<usize> {
     let active_root = codex_home.join("sessions");
     let archived_root = codex_home.join("archived_sessions");
@@ -102,38 +253,62 @@ fn index_codex_sessions_in(database: &Database, codex_home: &Path) -> AppResult<
     candidates.append(&mut archived);
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
 
-    // Keep every discovered path for stale-row reconciliation, but index only
-    // one physical copy of a logical session. Codex can briefly leave the same
-    // rollout in both roots while archiving; the active copy is authoritative.
+    // Codex writes auxiliary rollout files for subagents. They share the main
+    // thread's session_id but contain tool/context traffic rather than the
+    // conversation shown in Codex's sidebar, so only the user thread is kept.
+    // The selected paths also drive stale-row reconciliation, which removes
+    // incorrectly indexed subagent rows from earlier app versions.
+    let candidates = select_preferred_session_files(candidates);
+    let catalog = crate::codex_catalog::read_thread_catalog(codex_home).unwrap_or_default();
+    let catalog_path = crate::codex_catalog::state_database_path(codex_home);
     let seen_paths = candidates
         .iter()
         .map(|candidate| path_to_string(&candidate.path))
         .collect::<HashSet<_>>();
-    let candidates = select_preferred_session_files(candidates);
 
     let mut changed = Vec::new();
     for candidate in &candidates {
         let file_path = path_to_string(&candidate.path);
+        let catalog_thread = probe_session_identity(&candidate.path)
+            .and_then(|identity| catalog.get(&identity.session_id).cloned());
         let unchanged = database.with_connection(|connection| {
             let stored = connection
                 .query_row(
-                    "SELECT file_size, is_archived, metadata_json FROM sessions WHERE file_path = ?1",
+                    "SELECT file_size, is_archived, metadata_json, title, cwd, updated_at
+                     FROM sessions WHERE file_path = ?1",
                     [&file_path],
                     |row| {
                         Ok((
                             row.get::<_, i64>(0)?,
                             row.get::<_, i64>(1)? != 0,
                             row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, i64>(5)?,
                         ))
                     },
                 )
                 .optional()?;
 
-            Ok(stored.is_some_and(|(size, archived, metadata)| {
-                size == saturating_i64(candidate.fingerprint.size)
-                    && archived == candidate.archived
-                    && metadata_modified_ns(&metadata) == Some(candidate.fingerprint.modified_ns)
-            }))
+            Ok(
+                stored.is_some_and(|(size, archived, metadata, title, cwd, updated_at)| {
+                    let catalog_matches = catalog_thread.as_ref().is_none_or(|thread| {
+                        title == thread.title
+                            && cwd.as_deref() == Some(thread.cwd.as_str())
+                            && updated_at == thread.updated_at
+                            && archived == thread.archived
+                    });
+                    let expected_archived = catalog_thread
+                        .as_ref()
+                        .map_or(candidate.archived, |thread| thread.archived);
+                    catalog_matches
+                        && size == saturating_i64(candidate.fingerprint.size)
+                        && archived == expected_archived
+                        && metadata_modified_ns(&metadata)
+                            == Some(candidate.fingerprint.modified_ns)
+                        && metadata_index_version(&metadata) == Some(SESSION_INDEX_FORMAT_VERSION)
+                }),
+            )
         })?;
 
         if unchanged {
@@ -143,7 +318,26 @@ fn index_codex_sessions_in(database: &Database, codex_home: &Path) -> AppResult<
         // A malformed line does not poison the rest of a rollout. A transient
         // file-open error is skipped so an already-good row is never replaced
         // by an empty placeholder.
-        if let Ok(session) = parse_session_file(candidate) {
+        if let Ok(mut session) = parse_session_file(candidate) {
+            if let Some(thread) = catalog_thread {
+                session.title = thread.title;
+                session.title_origin = "native";
+                session.can_rename = true;
+                session.cwd = Some(thread.cwd);
+                session.created_at = thread.created_at;
+                session.updated_at = thread.updated_at;
+                session.archived = thread.archived;
+                session.native_store_path = path_to_string(&catalog_path);
+                if let Ok(mut metadata) = serde_json::from_str::<Value>(&session.metadata_json) {
+                    if let Some(object) = metadata.as_object_mut() {
+                        object.insert(
+                            "codexCatalog".into(),
+                            json!({"stateDatabase": path_to_string(&catalog_path)}),
+                        );
+                    }
+                    session.metadata_json = metadata.to_string();
+                }
+            }
             changed.push(session);
         }
     }
@@ -161,15 +355,20 @@ fn index_codex_sessions_in(database: &Database, codex_home: &Path) -> AppResult<
             )?;
             transaction.execute(
                 "INSERT INTO sessions (
-                    session_id, title, content, file_path, cwd, source_kind, created_at, updated_at,
-                    is_archived, content_hash, file_size, parse_status, parse_error, metadata_json, indexed_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'codex', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                    session_id, title, content, file_path, cwd, source_kind, native_session_id,
+                    native_store_path, title_origin, can_rename, created_at, updated_at, is_archived, content_hash,
+                    file_size, parse_status, parse_error, metadata_json, indexed_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
                  ON CONFLICT(session_id) DO UPDATE SET
                     title = excluded.title,
                     content = excluded.content,
                     file_path = excluded.file_path,
                     cwd = excluded.cwd,
                     source_kind = excluded.source_kind,
+                    native_session_id = excluded.native_session_id,
+                    native_store_path = excluded.native_store_path,
+                    title_origin = excluded.title_origin,
+                    can_rename = excluded.can_rename,
                     created_at = excluded.created_at,
                     updated_at = excluded.updated_at,
                     is_archived = excluded.is_archived,
@@ -185,6 +384,11 @@ fn index_codex_sessions_in(database: &Database, codex_home: &Path) -> AppResult<
                     &session.content,
                     &session.file_path,
                     &session.cwd,
+                    session.source_kind,
+                    &session.native_session_id,
+                    &session.native_store_path,
+                    session.title_origin,
+                    session.can_rename as i64,
                     session.created_at,
                     session.updated_at,
                     session.archived as i64,
@@ -334,7 +538,7 @@ pub fn search_sessions(
         let offset_parameter = values.len();
         let sql = format!(
             "SELECT s.session_id, s.title, s.content, s.cwd, s.created_at, s.updated_at,
-                    s.is_archived, s.source_kind
+                    s.is_archived, s.source_kind, s.title_origin, s.can_rename
              FROM {from_clause}{where_clause}{order_clause}
              LIMIT ?{limit_parameter} OFFSET ?{offset_parameter}"
         );
@@ -379,16 +583,17 @@ pub fn get_session(database: &Database, id: &str) -> AppResult<SessionDetail> {
         let stored = connection
             .query_row(
                 "SELECT session_id, title, content, cwd, created_at, updated_at, is_archived,
-                        source_kind, file_path, metadata_json, parse_status, parse_error
+                        source_kind, title_origin, can_rename, file_path, metadata_json,
+                        parse_status, parse_error
                  FROM sessions WHERE session_id = ?1",
                 [id],
                 |row| {
                     Ok((
                         map_stored_session(row)?,
-                        row.get::<_, String>(8)?,
-                        row.get::<_, String>(9)?,
                         row.get::<_, String>(10)?,
-                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, Option<String>>(13)?,
                     ))
                 },
             )
@@ -415,6 +620,94 @@ pub fn get_session(database: &Database, id: &str) -> AppResult<SessionDetail> {
     })
 }
 
+pub fn rename_session(
+    database: &Database,
+    id: &str,
+    requested_title: &str,
+) -> AppResult<SessionSummary> {
+    let title = requested_title.trim();
+    if title.is_empty()
+        || title.chars().count() > 120
+        || title.chars().any(char::is_control)
+        || title.contains(['\r', '\n'])
+    {
+        return Err(AppError::InvalidInput(
+            "session title must be one line with 1 to 120 characters".into(),
+        ));
+    }
+
+    let (source_kind, native_session_id, native_store_path, can_rename) = database
+        .with_connection(|connection| {
+            connection
+                .query_row(
+                    "SELECT source_kind, native_session_id, native_store_path, can_rename
+                     FROM sessions WHERE session_id = ?1",
+                    [id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)? != 0,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| AppError::NotFound(format!("session '{id}' was not found")))
+        })?;
+    if !can_rename {
+        return Err(AppError::Unsupported(format!(
+            "{source_kind} session does not expose a verified native rename store"
+        )));
+    }
+    let native_session_id = native_session_id.ok_or_else(|| {
+        AppError::Unsupported("session is missing its native source identity".into())
+    })?;
+    let native_store_path = native_store_path.ok_or_else(|| {
+        AppError::Unsupported("session is missing its native source store".into())
+    })?;
+
+    match source_kind.as_str() {
+        "codex" => {
+            crate::codex_catalog::rename_thread_title_in_database(
+                Path::new(&native_store_path),
+                &native_session_id,
+                title,
+            )?;
+        }
+        "claude" | "cursor" => {
+            crate::external_sessions::rename_external_session(
+                &source_kind,
+                &native_session_id,
+                Path::new(&native_store_path),
+                title,
+            )?;
+        }
+        _ => {
+            return Err(AppError::Unsupported(format!(
+                "session source '{source_kind}' does not support rename"
+            )));
+        }
+    }
+
+    database.with_connection(|connection| {
+        let changed = connection.execute(
+            "UPDATE sessions
+             SET title = ?1, title_origin = 'native', indexed_at = ?2
+             WHERE session_id = ?3",
+            params![title, chrono::Utc::now().timestamp(), id],
+        )?;
+        if changed != 1 {
+            return Err(AppError::Conflict(
+                "native session was renamed but the local index changed concurrently".into(),
+            ));
+        }
+        Ok(())
+    })?;
+
+    Ok(get_session(database, id)?.summary)
+}
+
 impl StoredSession {
     fn into_summary(self, query: &str) -> SessionSummary {
         let (preview, match_ranges) = make_preview(&self.title, &self.content, query);
@@ -426,7 +719,10 @@ impl StoredSession {
             created_at: self.created_at,
             updated_at: self.updated_at,
             archived: self.archived,
+            agent_type: self.source_kind.clone(),
             source_kind: self.source_kind,
+            title_origin: self.title_origin,
+            can_rename: self.can_rename,
             match_ranges,
         }
     }
@@ -442,6 +738,8 @@ fn map_stored_session(row: &Row<'_>) -> rusqlite::Result<StoredSession> {
         updated_at: row.get(5)?,
         archived: row.get::<_, i64>(6)? != 0,
         source_kind: row.get(7)?,
+        title_origin: row.get(8)?,
+        can_rename: row.get::<_, i64>(9)? != 0,
     })
 }
 
@@ -486,25 +784,50 @@ fn collect_jsonl_files(root: &Path, archived: bool) -> (Vec<FileCandidate>, bool
 }
 
 fn select_preferred_session_files(candidates: Vec<FileCandidate>) -> Vec<FileCandidate> {
-    let mut selected = HashMap::<String, FileCandidate>::new();
+    let mut selected = HashMap::<String, (FileCandidate, bool)>::new();
     for candidate in candidates {
-        let session_id = probe_session_id(&candidate.path)
-            .unwrap_or_else(|| fallback_session_id(&candidate.path));
+        let identity =
+            probe_session_identity(&candidate.path).unwrap_or_else(|| SessionFileIdentity {
+                session_id: fallback_session_id(&candidate.path),
+                thread_source: None,
+            });
+        // Desktop Codex stores guardian/subagent tool traces alongside the
+        // user-visible rollout. Those traces do not have a matching sidebar
+        // entry and were the source of duplicate “Untitled session” rows.
+        if identity.thread_source.as_deref() == Some("subagent") {
+            continue;
+        }
+        let is_user_thread = identity.thread_source.as_deref() == Some("user");
         let replace = selected
-            .get(&session_id)
-            .map(|current| candidate_precedes(&candidate, current))
+            .get(&identity.session_id)
+            .map(|(current, current_is_user_thread)| {
+                candidate_precedes(&candidate, is_user_thread, current, *current_is_user_thread)
+            })
             .unwrap_or(true);
         if replace {
-            selected.insert(session_id, candidate);
+            selected.insert(identity.session_id, (candidate, is_user_thread));
         }
     }
 
-    let mut selected = selected.into_values().collect::<Vec<_>>();
+    let mut selected = selected
+        .into_values()
+        .map(|(candidate, _)| candidate)
+        .collect::<Vec<_>>();
     selected.sort_by(|left, right| left.path.cmp(&right.path));
     selected
 }
 
-fn candidate_precedes(candidate: &FileCandidate, current: &FileCandidate) -> bool {
+fn candidate_precedes(
+    candidate: &FileCandidate,
+    candidate_is_user_thread: bool,
+    current: &FileCandidate,
+    current_is_user_thread: bool,
+) -> bool {
+    match (candidate_is_user_thread, current_is_user_thread) {
+        (true, false) => return true,
+        (false, true) => return false,
+        _ => {}
+    }
     match (candidate.archived, current.archived) {
         (false, true) => return true,
         (true, false) => return false,
@@ -516,7 +839,7 @@ fn candidate_precedes(candidate: &FileCandidate, current: &FileCandidate) -> boo
     candidate.path < current.path
 }
 
-fn probe_session_id(path: &Path) -> Option<String> {
+fn probe_session_identity(path: &Path) -> Option<SessionFileIdentity> {
     let file = File::open(path).ok()?;
     let mut reader = BufReader::new(file);
     let mut raw_line = Vec::new();
@@ -542,14 +865,20 @@ fn probe_session_id(path: &Path) -> Option<String> {
             .unwrap_or_default();
         if record_type == "session_meta" {
             let metadata_source = if payload.is_object() { payload } else { &value };
-            if let Some(id) =
-                string_field(metadata_source, &["id", "session_id", "conversation_id"])
+            if let Some(session_id) =
+                string_field(metadata_source, &["session_id", "conversation_id", "id"])
             {
-                return Some(id);
+                return Some(SessionFileIdentity {
+                    session_id,
+                    thread_source: string_field(metadata_source, &["thread_source"]),
+                });
             }
         }
-        if let Some(id) = string_field(payload, &["session_id", "conversation_id"]) {
-            return Some(id);
+        if let Some(session_id) = string_field(payload, &["session_id", "conversation_id"]) {
+            return Some(SessionFileIdentity {
+                session_id,
+                thread_source: None,
+            });
         }
     }
 }
@@ -640,7 +969,7 @@ fn parse_session_file(candidate: &FileCandidate) -> AppResult<IndexedSession> {
             let metadata_source = if payload.is_object() { payload } else { &value };
             if session_id.is_none() {
                 session_id =
-                    string_field(metadata_source, &["id", "session_id", "conversation_id"]);
+                    string_field(metadata_source, &["session_id", "conversation_id", "id"]);
             }
             if cwd.is_none() {
                 cwd = string_field(metadata_source, &["cwd", "working_directory"]);
@@ -713,8 +1042,15 @@ fn parse_session_file(candidate: &FileCandidate) -> AppResult<IndexedSession> {
         .iter()
         .find(|message| message.role == MessageRole::User)
         .map(|message| message.text.as_str());
-    let title = explicit_title
+    let native_title = explicit_title
         .as_deref()
+        .filter(|title| !is_placeholder_title(title));
+    let title_origin = if native_title.is_some() {
+        "native"
+    } else {
+        "derived"
+    };
+    let title = native_title
         .or(first_user_message)
         .map(clean_title)
         .filter(|title| !title.is_empty())
@@ -732,6 +1068,7 @@ fn parse_session_file(candidate: &FileCandidate) -> AppResult<IndexedSession> {
     let session_id = session_id
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| fallback_session_id(&candidate.path));
+    let native_session_id = session_id.clone();
     let parse_status = match (valid_lines, malformed_lines) {
         (0, _) => "error",
         (_, 0) => "ok",
@@ -746,6 +1083,7 @@ fn parse_session_file(candidate: &FileCandidate) -> AppResult<IndexedSession> {
     let metadata = json!({
         "sessionMeta": Value::Object(session_meta),
         "_index": {
+            "formatVersion": SESSION_INDEX_FORMAT_VERSION,
             "lineCount": line_number,
             "validLineCount": valid_lines,
             "malformedLineCount": malformed_lines,
@@ -756,10 +1094,15 @@ fn parse_session_file(candidate: &FileCandidate) -> AppResult<IndexedSession> {
 
     Ok(IndexedSession {
         session_id,
+        native_session_id,
+        native_store_path: path_to_string(&candidate.path),
         title,
+        title_origin,
+        can_rename: false,
         content,
         file_path: path_to_string(&candidate.path),
         cwd,
+        source_kind: "codex",
         created_at,
         updated_at,
         archived: candidate.archived,
@@ -778,7 +1121,7 @@ fn push_message(
     text: String,
     preferred: bool,
 ) {
-    let text = text.replace('\0', "�").trim().to_owned();
+    let text = strip_leading_system_context(&text.replace('\0', "�"));
     if text.is_empty() || is_control_message(&text) {
         return;
     }
@@ -788,6 +1131,48 @@ fn push_message(
         text,
         preferred,
     });
+}
+
+fn strip_leading_system_context(text: &str) -> String {
+    let mut remaining = text.trim();
+    loop {
+        if remaining.starts_with("# Files mentioned by the user:") {
+            if let Some(request_start) = remaining.find("## My request for Codex:") {
+                remaining = &remaining[request_start + "## My request for Codex:".len()..];
+                continue;
+            }
+            return String::new();
+        }
+        if remaining.starts_with("# AGENTS.md instructions") {
+            let Some(end) = remaining.find("</INSTRUCTIONS>") else {
+                return String::new();
+            };
+            remaining = &remaining[end + "</INSTRUCTIONS>".len()..];
+            continue;
+        }
+
+        let mut removed_block = false;
+        for (opening, closing) in [
+            ("<environment_context>", "</environment_context>"),
+            ("<permissions instructions>", "</permissions instructions>"),
+            ("<skills_instructions>", "</skills_instructions>"),
+            ("<apps_instructions>", "</apps_instructions>"),
+            ("<plugins_instructions>", "</plugins_instructions>"),
+            ("<recommended_plugins>", "</recommended_plugins>"),
+        ] {
+            if remaining.starts_with(opening) {
+                let Some(end) = remaining.find(closing) else {
+                    return String::new();
+                };
+                remaining = &remaining[end + closing.len()..];
+                removed_block = true;
+                break;
+            }
+        }
+        if !removed_block {
+            return remaining.trim().to_owned();
+        }
+    }
 }
 
 fn deduplicate_mirrored_messages(messages: &mut Vec<MessageCandidate>) {
@@ -861,6 +1246,13 @@ fn clean_title(text: &str) -> String {
         });
     let collapsed = first_line.split_whitespace().collect::<Vec<_>>().join(" ");
     truncate_chars(&collapsed, 120)
+}
+
+fn is_placeholder_title(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_lowercase().as_str(),
+        "untitled session" | "untitled"
+    )
 }
 
 fn strip_leading_environment_context(mut text: &str) -> &str {
@@ -969,6 +1361,15 @@ fn metadata_modified_ns(metadata_json: &str) -> Option<u128> {
         .as_str()
         .and_then(|value| value.parse::<u128>().ok())
         .or_else(|| modified.as_u64().map(u128::from))
+}
+
+fn metadata_index_version(metadata_json: &str) -> Option<u32> {
+    serde_json::from_str::<Value>(metadata_json)
+        .ok()?
+        .get("_index")?
+        .get("formatVersion")?
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
 }
 
 fn make_preview(title: &str, content: &str, query: &str) -> (String, Vec<TextRange>) {
@@ -1196,6 +1597,21 @@ mod tests {
         ]
     }
 
+    fn desktop_session_values(
+        session_id: &str,
+        record_id: &str,
+        thread_source: &str,
+        cwd: &str,
+        user: &str,
+        assistant: &str,
+    ) -> Vec<Value> {
+        let mut values = session_values(record_id, cwd, user, assistant);
+        let metadata = values[0]["payload"].as_object_mut().unwrap();
+        metadata.insert("session_id".into(), Value::String(session_id.into()));
+        metadata.insert("thread_source".into(), Value::String(thread_source.into()));
+        values
+    }
+
     fn request(query: &str) -> SessionSearchRequest {
         SessionSearchRequest {
             query: query.to_owned(),
@@ -1239,6 +1655,58 @@ mod tests {
         assert_eq!(parsed.updated_at, 1_783_818_240);
         assert_eq!(parsed.parse_status, "partial");
         assert!(parsed.parse_error.as_deref().unwrap().contains("line 6"));
+        assert_eq!(
+            metadata_index_version(&parsed.metadata_json),
+            Some(SESSION_INDEX_FORMAT_VERSION)
+        );
+    }
+
+    #[test]
+    fn desktop_context_does_not_become_a_session_title_or_preview() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("sessions/desktop-context.jsonl");
+        let values = vec![
+            json!({
+                "timestamp": "2026-07-12T01:00:00Z",
+                "type": "session_meta",
+                "payload": {"session_id": "desktop", "id": "desktop", "thread_source": "user", "cwd": "/work"}
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "<recommended_plugins>internal list</recommended_plugins>"}
+                ]}
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "<environment_context><cwd>/work</cwd></environment_context>"}
+                ]}
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": [
+                    {"type": "input_text", "text": "为客户会议生成项目周报"}
+                ]}
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {"type": "message", "role": "assistant", "content": [
+                    {"type": "output_text", "text": "已整理周报结构。"}
+                ]}
+            }),
+        ];
+        write_jsonl(&path, &values, false);
+        let metadata = fs::metadata(&path).unwrap();
+        let parsed = parse_session_file(&FileCandidate {
+            path,
+            archived: false,
+            fingerprint: fingerprint(&metadata).unwrap(),
+        })
+        .unwrap();
+
+        assert_eq!(parsed.title, "为客户会议生成项目周报");
+        assert_eq!(parsed.content, "为客户会议生成项目周报\n\n已整理周报结构。");
     }
 
     #[test]
@@ -1444,6 +1912,53 @@ mod tests {
     }
 
     #[test]
+    fn indexes_user_thread_and_discards_subagent_rollouts() {
+        let codex_home = TempDir::new().unwrap();
+        let app_data = TempDir::new().unwrap();
+        let database = Database::open(app_data.path()).unwrap();
+        let main = codex_home.path().join("sessions/main.jsonl");
+        let subagent = codex_home.path().join("sessions/subagent.jsonl");
+        write_jsonl(
+            &main,
+            &desktop_session_values(
+                "user-thread",
+                "user-thread",
+                "user",
+                "/work",
+                "设计 Skills 生成流程",
+                "主线程回答",
+            ),
+            false,
+        );
+        write_jsonl(
+            &subagent,
+            &desktop_session_values(
+                "user-thread",
+                "subagent-run",
+                "subagent",
+                "/work",
+                "<environment_context>internal</environment_context>",
+                "内部工具结果",
+            ),
+            false,
+        );
+
+        assert_eq!(
+            index_codex_sessions_in(&database, codex_home.path()).unwrap(),
+            1
+        );
+        assert_eq!(
+            get_session(&database, "user-thread").unwrap().summary.title,
+            "设计 Skills 生成流程"
+        );
+        assert!(matches!(
+            get_session(&database, "subagent-run"),
+            Err(AppError::NotFound(_))
+        ));
+        assert_eq!(search_sessions(&database, &request("")).unwrap().len(), 1);
+    }
+
+    #[test]
     fn searches_empty_short_and_trigram_queries_with_filters() {
         let codex_home = TempDir::new().unwrap();
         let app_data = TempDir::new().unwrap();
@@ -1537,6 +2052,8 @@ mod tests {
             updated_at: 0,
             archived: false,
             source_kind: "codex".into(),
+            title_origin: "derived".into(),
+            can_rename: false,
         };
         let summary = stored.into_summary("Skills");
         assert_eq!(summary.preview, "😀Skills Manager");

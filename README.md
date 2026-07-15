@@ -10,9 +10,9 @@
 
 ![Skills Manager brand lock-up](assets/brand/skills-manager-lockup-light.png)
 
-Skills Manager brings local Codex session search and multi-agent Skill management into one native desktop workspace. It is built with Tauri, Rust and React, keeps its index and operational data on your device, and does not execute Skill content while scanning or previewing it.
+Skills Manager brings local Codex, Claude Code and Cursor session search together with multi-agent Skill management in one native desktop workspace. It is built with Tauri, Rust and React, keeps its index and operational data on your device, and does not execute Skill content while scanning or previewing it.
 
-> Project status: `v1.0.0` is the first public release. Windows installers are available; macOS and Linux can currently be built from source but do not yet have official release binaries.
+> Project status: `v1.0.1` adds multi-agent native session titles, project trees, safe native renaming and the Custom Skills workbench. Windows installers are available; macOS and Linux can currently be built from source but do not yet have official release binaries.
 
 ## Download
 
@@ -27,20 +27,21 @@ Each GitHub Release contains:
 Verify a downloaded file in PowerShell:
 
 ```powershell
-Get-FileHash .\Skills-Manager_1.0.0_windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\Skills-Manager_1.0.1_windows-x64-setup.exe -Algorithm SHA256
 ```
 
 The current Windows packages include the offline WebView2 runtime, so they are intentionally large and do not need to download that component during installation. The initial public packages are not yet Authenticode-signed; Windows SmartScreen may therefore show an unknown-publisher warning. Only download releases from this repository.
 
 ## Highlights
 
-- **Codex session search** — incrementally indexes local JSONL sessions in SQLite and provides Chinese/English title and body substring search with UTF-16 highlight ranges.
+- **Multi-agent session search** — incrementally indexes local Codex, Claude Code and Cursor sessions in SQLite, preserves native titles and groups conversations by Agent and project/workspace.
 - **One Skill inventory** — discovers user-level and project-level Skills for Codex, Claude Code and Cursor, including duplicate names, broken links, managed locations and read-only sources.
 - **Single source, multiple agents** — imports a local Skill into a content-addressed store and deploys it through verified junctions or symbolic links.
 - **Safe local inspection** — performs static risk scanning with redacted evidence and never executes Skill scripts during discovery, preview or scanning.
 - **Chinese description overlay** — creates faithful translations or 40–80 character capability summaries without overwriting the author's `SKILL.md` or original description.
 - **Provider choice** — supports loopback Ollama/LM Studio, OpenAI BYOK and user-configured HTTPS OpenAI-compatible chat-completions endpoints.
 - **Explicit batch workflow** — lets users choose missing, stale, failed or already translated Skills, retry selected items, and clear previous run logs when reopening the workflow.
+- **Custom Skills workbench** — turns a short requirement into a reviewable Skill through required follow-up questions, optional Session evidence, optional constrained OpenAPI search, static scanning and semantic validation before it can be saved.
 - **Desktop-native workspace** — includes Future Dark/Future Light themes, compact and comfortable density modes, a command centre and a persistent status bar.
 - **Three interface languages** — English (UK, default), Simplified Chinese and Traditional Chinese.
 - **Local-first privacy** — no telemetry, no background uploads and no model request during ordinary Skill scans.
@@ -66,6 +67,16 @@ AI descriptions are disabled by default and are only generated after an explicit
 - API keys, private keys, bearer tokens, connection strings, absolute paths and similar sensitive input are blocked before a remote request.
 
 See [PRIVACY.md](PRIVACY.md) for the full data boundary.
+
+## Custom Skills privacy and safety
+
+Custom Skills are written atomically to the installation library `custome skills\<skill-name>` and are scanned alongside other Skills. The application never executes generated scripts.
+
+- Selecting Sessions creates a local requirement ledger with session IDs, hashes and excerpts. Session facts take precedence over the user request and web candidates throughout generation and validation.
+- A remote provider receives only redacted, necessary selected-session context after **Allow remote Session context** is enabled in Settings; this setting is off by default. Prompts, raw session content, raw search results and API keys are excluded from audit logs.
+- Optional OpenAPI search accepts only a user-imported OpenAPI 3.x JSON document with a HTTPS GET/POST operation. Redirects, credentials in URLs, loopback/private literal hosts, server variables, callbacks and `$ref` are rejected. Search API keys are kept in the system credential store.
+- Candidate content is shown with source and licence information and is treated as untrusted: it can inform method or structure, not override Session facts or be copied without authorisation.
+- A validation warning needs a recorded override reason. A blocked security finding cannot be overridden.
 
 ## Technology
 

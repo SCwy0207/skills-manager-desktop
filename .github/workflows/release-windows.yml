@@ -1,0 +1,228 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish Windows installers
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    env:
+      CI: "true"
+      CARGO_TERM_COLOR: always
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "11.7.0"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release version
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $match = [regex]::Match(
+            $tag,
+            '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$'
+          )
+
+          if (-not $match.Success) {
+            throw "Release tag must use v<semver>; received '$tag'."
+          }
+
+          $version = $match.Groups['version'].Value
+          $packageVersion = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoMetadata = cargo metadata `
+            --manifest-path src-tauri/Cargo.toml `
+            --format-version 1 `
+            --no-deps `
+            --locked | ConvertFrom-Json
+          $cargoVersion = $cargoMetadata.packages[0].version
+
+          if (
+            $packageVersion -ne $version -or
+            $cargoVersion -ne $version -or
+            $tauriVersion -ne $version
+          ) {
+            throw "Version mismatch: tag=$version package.json=$packageVersion Cargo.toml=$cargoVersion tauri.conf.json=$tauriVersion"
+          }
+
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Run frontend tests
+        run: pnpm test
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Remove stale installer bundles
+        run: |
+          $bundleDirectory = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\bundle"
+          if (Test-Path -LiteralPath $bundleDirectory) {
+            Remove-Item -LiteralPath $bundleDirectory -Recurse -Force
+          }
+
+      - name: Build NSIS and MSI installers
+        run: pnpm tauri build --ci --bundles nsis,msi -- --locked
+
+      - name: Stage release assets and generate checksums
+        run: |
+          $bundleRoot = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\bundle"
+          $nsisInstallers = @(
+            Get-ChildItem `
+              -LiteralPath (Join-Path $bundleRoot "nsis") `
+              -Filter "*.exe" `
+              -File
+          )
+          $msiInstallers = @(
+            Get-ChildItem `
+              -LiteralPath (Join-Path $bundleRoot "msi") `
+              -Filter "*.msi" `
+              -File
+          )
+
+          if ($nsisInstallers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($nsisInstallers.Count)."
+          }
+          if ($msiInstallers.Count -ne 1) {
+            throw "Expected exactly one MSI installer, found $($msiInstallers.Count)."
+          }
+
+          foreach ($installer in @($nsisInstallers[0], $msiInstallers[0])) {
+            if ($installer.Length -le 0) {
+              throw "Installer is empty: $($installer.FullName)"
+            }
+          }
+
+          $outputDirectory = Join-Path $env:GITHUB_WORKSPACE "release-assets"
+          if (Test-Path -LiteralPath $outputDirectory) {
+            Remove-Item -LiteralPath $outputDirectory -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $outputDirectory | Out-Null
+
+          $nsisOutput = Join-Path $outputDirectory "Skills-Manager_${env:APP_VERSION}_windows-x64-setup.exe"
+          $msiOutput = Join-Path $outputDirectory "Skills-Manager_${env:APP_VERSION}_windows-x64_en-US.msi"
+
+          Copy-Item -LiteralPath $nsisInstallers[0].FullName -Destination $nsisOutput
+          Copy-Item -LiteralPath $msiInstallers[0].FullName -Destination $msiOutput
+
+          $checksumLines = foreach ($file in (@($nsisOutput, $msiOutput) | Sort-Object)) {
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path -Leaf $file)"
+          }
+
+          $checksumPath = Join-Path $outputDirectory "SHA256SUMS.txt"
+          [System.IO.File]::WriteAllLines(
+            $checksumPath,
+            [string[]]$checksumLines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+          $releaseAssets = @(Get-ChildItem -LiteralPath $outputDirectory -File)
+          if ($releaseAssets.Count -ne 3) {
+            throw "Expected two installers and SHA256SUMS.txt, found $($releaseAssets.Count) files."
+          }
+
+          $releaseAssets | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $repository = $env:GITHUB_REPOSITORY
+
+          & gh release view $tag --repo $repository *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if (-not $releaseExists) {
+            $createArguments = @(
+              "release",
+              "create",
+              $tag,
+              "--repo",
+              $repository,
+              "--verify-tag",
+              "--title",
+              "Skills Manager $tag",
+              "--notes-file",
+              "RELEASE_NOTES.md"
+            )
+
+            if ($tag.Contains("-")) {
+              $createArguments += "--prerelease"
+            }
+
+            & gh @createArguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create GitHub Release for '$tag'."
+            }
+          } else {
+            & gh release edit $tag `
+              --repo $repository `
+              --title "Skills Manager $tag" `
+              --notes-file "RELEASE_NOTES.md"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to update GitHub Release notes for '$tag'."
+            }
+          }
+
+          $assets = @(
+            Get-ChildItem `
+              -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "release-assets") `
+              -File |
+            Sort-Object Name |
+            ForEach-Object FullName
+          )
+
+          & gh release upload $tag @assets --repo $repository --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload release assets for '$tag'."
+          }

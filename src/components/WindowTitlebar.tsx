@@ -48,7 +48,6 @@ export function WindowTitlebar({
 }: WindowTitlebarProps) {
   const { t } = useI18n();
   const appWindowRef = useRef<TauriWindow | null>(null);
-  const allowCloseRef = useRef(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
   const resolveWindow = useCallback(async () => {
@@ -87,14 +86,12 @@ export function WindowTitlebar({
       });
       const unlistenClose = await appWindow.onCloseRequested(async (event) => {
         const { criticalOperations, skillEditorDirty } = useUiStore.getState();
-        if (allowCloseRef.current || (!Object.keys(criticalOperations).length && !skillEditorDirty)) return;
+        if (!Object.keys(criticalOperations).length && !skillEditorDirty) return;
         event.preventDefault();
         if (!confirmWindowClose()) return;
-        allowCloseRef.current = true;
         try {
-          await appWindow.close();
+          await appWindow.destroy();
         } catch (error) {
-          allowCloseRef.current = false;
           console.warn("Unable to close the desktop window.", error);
         }
       });
@@ -121,12 +118,12 @@ export function WindowTitlebar({
       try {
         if (action === "close") {
           if (!confirmWindowClose()) return;
-          allowCloseRef.current = true;
+          await appWindow.destroy();
+          return;
         }
         await appWindow[action]();
         if (action === "toggleMaximize") await syncMaximizedState();
       } catch (error) {
-        if (action === "close") allowCloseRef.current = false;
         console.warn(`Unable to ${action} the desktop window.`, error);
       }
     },

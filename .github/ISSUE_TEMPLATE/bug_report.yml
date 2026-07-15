@@ -1,0 +1,76 @@
+name: Bug report
+description: Report reproducible behaviour in Skills Manager
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove API keys, session text, Skill content, usernames and absolute local paths from screenshots and logs. Security vulnerabilities must be reported privately through the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: Skills Manager version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - NSIS setup.exe
+        - MSI
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Related agent
+      options:
+        - Codex
+        - Claude Code
+        - Cursor
+        - Multiple agents
+        - Not agent-specific
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: Describe the smallest reliable sequence.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Sanitised diagnostics
+      description: Attach only redacted screenshots or logs.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed API keys, session content, Skill content, usernames and absolute paths.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

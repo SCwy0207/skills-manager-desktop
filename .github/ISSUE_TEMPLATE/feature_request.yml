@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a focused improvement
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the interaction and expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: effects
+    attributes:
+      label: Possible effects
+      options:
+        - label: This may add or change network access.
+        - label: This may change credential handling.
+        - label: This may change filesystem or process access.
+        - label: This needs new English/Chinese interface text.

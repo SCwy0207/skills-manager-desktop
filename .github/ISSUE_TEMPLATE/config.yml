@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/SCwy0207/skills-manager-desktop/security/advisories/new
+    about: Report security issues privately; never include secrets in a public issue.

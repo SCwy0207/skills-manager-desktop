@@ -11,6 +11,7 @@ mod skills;
 use std::path::PathBuf;
 
 use db::Database;
+use tauri::Manager;
 
 pub struct AppState {
     pub database: Database,
@@ -20,10 +21,19 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            use tauri::Manager;
             let app_data_dir = app
                 .path()
                 .app_data_dir()
@@ -73,4 +83,24 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skills Manager");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn main_window_can_close_and_destroy_itself() {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json"))
+                .expect("main capability must remain valid JSON");
+        let permissions = capability["permissions"]
+            .as_array()
+            .expect("main capability permissions must be an array");
+
+        for required in ["core:window:allow-close", "core:window:allow-destroy"] {
+            assert!(
+                permissions.iter().any(|permission| permission == required),
+                "main window is missing {required}"
+            );
+        }
+    }
 }

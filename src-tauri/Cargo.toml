@@ -43,5 +43,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 futures-util = "0.3"
 tokio = { version = "1", features = ["time", "rt-multi-thread", "macros"] }
 
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "=2.4.3"
+
 [dev-dependencies]
 tempfile = "3"

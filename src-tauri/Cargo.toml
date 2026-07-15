@@ -1,6 +1,6 @@
 [package]
 name = "skills-manager"
-version = "1.0.0"
+version = "1.0.1"
 description = "Local-first desktop manager for Codex sessions and agent skills"
 authors = ["Victor Kuo"]
 license = "MIT"

@@ -1,43 +1,54 @@
-# Skills Manager v1.0.0
+# Skills Manager v1.0.1
 
-Skills Manager 1.0.0 is the first public release of the local-first desktop workspace for Codex sessions and Agent Skills.
+Skills Manager 1.0.1 expands the local-first desktop workspace from Codex-only session discovery to a unified Codex, Claude Code and Cursor session experience, and introduces evidence-driven Custom Skills generation.
 
-## v1.0.0 hotfix refresh
+## Highlights
 
-- Fixed the custom title-bar close button so the window and process exit normally.
-- Enforced a single running application instance; launching Skills Manager again now restores and focuses the existing window.
-- Fixed DeepSeek V4 translation and summary generation. The official DeepSeek endpoint now uses supported JSON mode, starts with a fast non-thinking request, and retries once with a larger thinking budget when the first result cannot be loaded.
-- Reasoning text is never displayed or stored as a Skill description; only the validated final response is accepted.
+- Indexes local Codex, Claude Code and Cursor sessions on startup, on window focus and when the session list reaches its end.
+- Uses each Agent's native session title when available and filters internal/sub-agent traces instead of exposing duplicate “Untitled session” rows.
+- Organises sessions as `Agent → project/workspace → session`, using registered project names and hiding Agent groups that have no detected sessions.
+- Adds safe right-click, `F2` and `Shift+F10` session renaming. Names are written back to the native Codex, Claude Code or Cursor store so the Agent shows the same title next time it opens.
+- Adds the Custom Skills workbench: required follow-up questions, optional Session evidence, optional constrained OpenAPI search, editable file preview and validation before save.
+- Treats selected Session evidence as the primary business source and checks generated Skills for missing requirements, conflicts and unsupported expansion.
+- Adds custom Skill scanning, safe staged writes, Agent link repair and Codex/Claude global guidance integration.
+- Fixes Custom Skills and session surfaces so all controls, lists, menus and dialogs follow Future Light and Future Dark themes.
 
-## What is included
+## Safety and privacy
 
-- Search local Codex sessions with Chinese/English substring matching and highlights.
-- Discover and manage Skills across Codex, Claude Code and Cursor.
-- Inspect Skill health and run local static security scans without executing Skill content.
-- Deploy managed Skills from one content-addressed source to multiple agents.
-- Translate or summarise English Skill descriptions into a local Chinese overlay.
-- Use Ollama/LM Studio, OpenAI BYOK or a generic OpenAI-compatible HTTPS endpoint.
-- Select exactly which Skills to translate, retry failed items and regenerate existing results.
-- Switch between English (UK), Simplified Chinese and Traditional Chinese, plus Future Dark and Future Light themes.
+- Remote Session context remains disabled by default and is only sent when the user explicitly enables it.
+- OpenAPI search is restricted to configured HTTPS operations and blocks redirects, private network targets and external `$ref` values.
+- Generated scripts are never executed. Blocking security findings cannot be overridden.
+- Audit records store hashes, counts and outcomes rather than raw sessions, prompts, search content or API keys.
+
+## Validation
+
+- Frontend tests and TypeScript production build.
+- Rust unit and integration tests covering native session parsing/renaming, OpenAPI restrictions, evidence validation, custom Skill persistence and Agent repair.
+- Windows MSI and NSIS packaging through the repository release workflow.
 
 ## Downloads
 
-- Use the NSIS `setup.exe` for a normal per-user Windows installation.
-- Use the MSI package for managed Windows environments.
-- Compare your download with `SHA256SUMS.txt` before installation.
+- Use `Skills-Manager_1.0.1_windows-x64-setup.exe` for a normal per-user installation.
+- Use `Skills-Manager_1.0.1_windows-x64_en-US.msi` for managed Windows environments.
+- Verify either installer with `SHA256SUMS.txt`.
 
-The packages include the offline WebView2 runtime and are therefore approximately 201 MiB each. This release is not yet Authenticode-signed, so Windows may display an unknown-publisher warning.
-
-The source code and technical documentation are available under the MIT
-License, copyright © 2026 Victor Kuo. Product identity assets are covered by
-the repository's separate brand-use notice.
+The Windows packages include the offline WebView2 runtime and are therefore intentionally large. They are not yet Authenticode-signed, so Windows may display an unknown-publisher warning.
 
 ---
 
-# Skills Manager v1.0.0 中文说明
+# Skills Manager v1.0.1 中文说明
 
-这是 Skills Manager 的首个公开版本：本地检索 Codex 会话，统一发现、审计、翻译和部署 Codex、Claude Code 与 Cursor Skills。应用无遥测，普通扫描不会触发模型请求；远程 AI 仅在用户主动确认后发送列明字段。源代码与技术文档采用 MIT License，版权名为 Victor Kuo；产品品牌素材适用仓库中的单独品牌使用说明。
+Skills Manager 1.0.1 将本地会话能力从 Codex 扩展为 Codex、Claude Code、Cursor 统一体验，并加入以会话证据为核心的自定义 Skills 生成工作台。
 
-本次 v1.0.0 热修复解决了标题栏关闭按钮失效和应用多开问题；重复启动现在只会恢复并聚焦已有窗口。同时修复 DeepSeek V4 中文翻译：优先使用快速非思考模式，结果无法加载时自动使用更大输出预算进行一次思考模式兜底，并且只保存通过校验的最终中文正文，不展示或存储思考内容。
+## 主要更新
 
-普通用户建议下载 NSIS `setup.exe`，受管环境可使用 MSI。安装包携带 WebView2 离线运行时，体积约 201 MiB；安装前请使用 `SHA256SUMS.txt` 校验。当前版本暂未进行 Authenticode 签名，Windows 可能显示未知发布者提示。
+- 启动、窗口重新获得焦点以及会话列表滚动到底部时，自动刷新三类 Agent 的本地会话。
+- 优先显示 Agent 原生会话名称，过滤内部/子 Agent 轨迹，避免重复的“未命名会话”。
+- 使用“Agent → 项目/工作区 → 会话”目录树；已登记项目显示项目名称，没有检测到会话的 Agent 不显示一级标题。
+- 支持右键、`F2` 和 `Shift+F10` 重命名，并将名称安全写回 Codex、Claude Code 或 Cursor 原生存储，使 Agent 下次打开时显示相同名称。
+- 新增自定义 Skills 工作台：必答追问、可选 Session 证据、受限 OpenAPI 联网搜索、文件预览编辑和保存前验证。
+- 勾选 Session 时，以会话业务证据为最高优先级；生成后检查需求缺失、证据冲突和无依据扩展。
+- 新增自定义 Skill 扫描、安全暂存写入、Agent 链接修复，以及 Codex/Claude 全局引导接入。
+- 修复浅色主题中的黑色列表和控件，目录树、菜单、弹窗与表单均跟随 Future Light / Future Dark。
+
+远程 Session 上下文默认关闭；联网搜索仅允许配置好的 HTTPS 操作并阻断重定向、内网地址和外部 `$ref`。生成脚本永不执行，阻断级安全风险不可绕过。普通用户建议下载 NSIS `setup.exe`，受管环境可使用 MSI；安装前请使用 `SHA256SUMS.txt` 校验。

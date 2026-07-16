@@ -20,6 +20,7 @@ import { BrandMark } from "./components/BrandMark";
 import { WindowTitlebar } from "./components/WindowTitlebar";
 import { SessionsView } from "./features/SessionsView";
 import { SkillsView } from "./features/SkillsView";
+import { CustomSkillsSettingsSection, CustomSkillsView } from "./features/CustomSkillsView";
 import {
   ActivityView,
   AddProjectDialog,
@@ -46,13 +47,14 @@ const navigation: Array<{
     items: [
       { id: "sessions", labelKey: "app.section.sessions", icon: MessageSquareText, shortcut: "Ctrl 1" },
       { id: "skills", labelKey: "app.section.skills", icon: Layers3, shortcut: "Ctrl 2" },
+      { id: "customSkills", labelKey: "app.section.customSkills", icon: Sparkles, shortcut: "Ctrl 3" },
     ],
   },
   {
     groupKey: "app.nav.workspace",
     items: [
-      { id: "projects", labelKey: "app.section.projects", icon: FolderGit2, shortcut: "Ctrl 3" },
-      { id: "activity", labelKey: "app.section.activity", icon: Activity, shortcut: "Ctrl 4" },
+      { id: "projects", labelKey: "app.section.projects", icon: FolderGit2, shortcut: "Ctrl 4" },
+      { id: "activity", labelKey: "app.section.activity", icon: Activity, shortcut: "Ctrl 5" },
     ],
   },
 ];
@@ -60,6 +62,7 @@ const navigation: Array<{
 const sectionNameKeys: Record<Section, string> = {
   sessions: "app.section.sessions",
   skills: "app.section.skills",
+  customSkills: "app.section.customSkills",
   projects: "app.section.projects",
   activity: "app.section.activity",
   settings: "app.section.settings",
@@ -68,6 +71,7 @@ const sectionNameKeys: Record<Section, string> = {
 const sectionDescriptionKeys: Record<Section, string> = {
   sessions: "app.section.sessions.description",
   skills: "app.section.skills.description",
+  customSkills: "app.section.customSkills.description",
   projects: "app.section.projects.description",
   activity: "app.section.activity.description",
   settings: "app.section.settings.description",
@@ -76,6 +80,7 @@ const sectionDescriptionKeys: Record<Section, string> = {
 const sectionIcons: Record<Section, typeof MessageSquareText> = {
   sessions: MessageSquareText,
   skills: Layers3,
+  customSkills: Sparkles,
   projects: FolderGit2,
   activity: Activity,
   settings: Settings,
@@ -119,6 +124,42 @@ export default function App() {
       return job && (job.status === "queued" || job.status === "running") ? 800 : 4_000;
     },
   });
+
+  // Agent-owned session stores can change while this app is closed.
+  // Sync once per Skills Manager launch so every session consumer starts from
+  // the same current local index, and again after the app regains focus.
+  useEffect(() => {
+    let active = true;
+    let inFlight = false;
+    let lastSyncAt = 0;
+    const syncSessions = () => {
+      if (inFlight || Date.now() - lastSyncAt < 5_000) return;
+      inFlight = true;
+      lastSyncAt = Date.now();
+      void desktopApi.indexSessions()
+        .then(() => {
+          if (active) {
+            return Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+              queryClient.invalidateQueries({ queryKey: ["session"] }),
+            ]);
+          }
+        })
+        .catch(() => {
+          // The Sessions view exposes a retryable error for manual indexing; a
+          // background refresh must not prevent the rest of the app loading.
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    syncSessions();
+    window.addEventListener("focus", syncSessions);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", syncSessions);
+    };
+  }, [queryClient]);
 
   const projects = projectsQuery.data ?? [];
   const currentProject =
@@ -173,12 +214,16 @@ export default function App() {
     const queryKeys: Record<Section, readonly string[][]> = {
       sessions: [["sessions"]],
       skills: [["skills"], ["skill"]],
+      customSkills: [["sessions"], ["openapi-search-profiles"], ["custom-skills-settings"]],
       projects: [["projects"]],
       activity: [["audit-logs"]],
       settings: [["capabilities"], ["ai-description-settings"]],
     };
     setRefreshingSection(true);
     try {
+      if (section === "sessions" || section === "customSkills") {
+        await desktopApi.indexSessions();
+      }
       await Promise.all(
         queryKeys[section].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
       );
@@ -229,8 +274,9 @@ export default function App() {
       const shortcutSections: Partial<Record<string, Section>> = {
         "1": "sessions",
         "2": "skills",
-        "3": "projects",
-        "4": "activity",
+        "3": "customSkills",
+        "4": "projects",
+        "5": "activity",
       };
       const targetSection = shortcutSections[key];
       if (targetSection) {
@@ -358,8 +404,9 @@ export default function App() {
         </header>
 
         <div className="view-host">
-          {section === "sessions" && <SessionsView project={currentProject} />}
+          {section === "sessions" && <SessionsView project={currentProject} projects={projects} />}
           {section === "skills" && <SkillsView projects={projects} project={currentProject} />}
+          {section === "customSkills" && <CustomSkillsView />}
           {section === "projects" && (
             <ProjectsView
               projects={projects}
@@ -375,6 +422,7 @@ export default function App() {
               loading={capabilitiesQuery.isLoading}
               error={capabilitiesQuery.error}
               onRetry={() => void capabilitiesQuery.refetch()}
+              customSkillsSection={<CustomSkillsSettingsSection />}
             />
           )}
         </div>
@@ -388,6 +436,8 @@ export default function App() {
               ? t("app.status.sessions")
               : section === "skills"
                 ? t("app.status.skills")
+                : section === "customSkills"
+                  ? t("app.status.customSkills")
                 : section === "projects"
                   ? t("app.status.projects", { count: projects.length })
                   : section === "activity"

@@ -1,4 +1,4 @@
-export type Section = "sessions" | "skills" | "projects" | "activity" | "settings";
+export type Section = "sessions" | "skills" | "customSkills" | "projects" | "activity" | "settings";
 
 export interface CapabilityInfo {
   platform: string;
@@ -33,7 +33,15 @@ export interface SessionSummary {
   updatedAt: number;
   archived: boolean;
   sourceKind: string;
+  agentType: "codex" | "claude" | "cursor";
+  titleOrigin: "native" | "derived" | "fallback";
+  canRename: boolean;
   matchRanges: TextRange[];
+}
+
+export interface RenameSessionRequest {
+  id: string;
+  title: string;
 }
 
 export interface SessionDetail {
@@ -162,6 +170,131 @@ export interface SecurityScanResult {
   skippedBinaryFiles: number;
   skippedOversizedFiles: number;
   skippedLinks: number;
+}
+
+export interface CustomSkillsSettings {
+  libraryPath: string;
+  allowRemoteSessionContext: boolean;
+}
+
+export interface UpdateCustomSkillsSettingsRequest {
+  allowRemoteSessionContext: boolean;
+}
+
+export interface OpenApiSearchProfile {
+  id: string;
+  name: string;
+  operationId: string;
+  queryParameter: string;
+  resultsPointer: string;
+  endpointHost: string;
+  enabled: boolean;
+  apiKeyConfigured: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SaveOpenApiSearchProfileRequest {
+  id?: string | null;
+  name: string;
+  specification: string;
+  operationId: string;
+  queryParameter: string;
+  resultsPointer: string;
+  apiKey?: string | null;
+  enabled: boolean;
+}
+
+export interface CustomSkillQuestion {
+  id: string;
+  prompt: string;
+  required: boolean;
+}
+
+export interface CustomSkillRequirement {
+  id: string;
+  label: string;
+  value: string;
+}
+
+export interface SessionEvidence {
+  sessionId: string;
+  title: string;
+  contentHash: string;
+  excerpt: string;
+  sourcePosition: string;
+}
+
+export interface WebSkillCandidate {
+  title: string;
+  url: string;
+  summary: string;
+  license?: string | null;
+  source: string;
+  selected: boolean;
+}
+
+export interface CustomSkillFile {
+  path: string;
+  content: string;
+}
+
+export interface CustomSkillValidationIssue {
+  severity: "error" | "warning" | "info" | string;
+  kind: string;
+  message: string;
+  sessionIds: string[];
+  filePath?: string | null;
+}
+
+export interface CustomSkillValidation {
+  status: "passed" | "review" | "blocked" | string;
+  structuralStatus: string;
+  securityStatus: string;
+  semanticStatus: string;
+  issues: CustomSkillValidationIssue[];
+  checkedAt: number;
+}
+
+export interface CustomSkillRun {
+  id: string;
+  status: "interview" | "ready" | "generated" | "saved" | "overridden" | string;
+  prompt: string;
+  question?: CustomSkillQuestion | null;
+  requirements: CustomSkillRequirement[];
+  selectedSessionIds: string[];
+  sessionEvidence: SessionEvidence[];
+  webCandidates: WebSkillCandidate[];
+  files: CustomSkillFile[];
+  validation?: CustomSkillValidation | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface StartCustomSkillRunRequest {
+  prompt: string;
+  sessionIds: string[];
+  useWeb: boolean;
+  searchProfileId?: string | null;
+}
+
+export interface AnswerCustomSkillQuestionRequest {
+  runId: string;
+  answer: string;
+}
+
+export interface GenerateCustomSkillRequest { runId: string; }
+export interface SaveCustomSkillRequest { runId: string; overrideReason?: string | null; }
+export interface SaveCustomSkillResult { path: string; name: string; validationStatus: string; }
+export interface RepairCustomSkillsRequest { agentType: "codex" | "claude" | "cursor"; }
+export interface RepairCustomSkillsResult {
+  libraryPath: string;
+  agentType: string;
+  linked: number;
+  existing: number;
+  conflicts: string[];
+  promptStatus: string;
+  cursorPrompt?: string | null;
 }
 
 export type AiDescriptionProviderId = "local" | "openai" | "compatible";

@@ -16,8 +16,8 @@ use crate::{
     db::Database,
     error::{AppError, AppResult},
     models::{
-        DeploymentTarget, ImportSkillRequest, ImportSkillResult, SkillBindingSummary,
-        WriteSkillFileRequest, WriteSkillFileResult,
+        DeploymentTarget, ImportSkillRequest, ImportSkillResult, RepairCustomSkillsResult,
+        SkillBindingSummary, WriteSkillFileRequest, WriteSkillFileResult,
     },
     skills,
 };
@@ -917,6 +917,138 @@ pub fn write_skill_file(
     })
 }
 
+/// Rebuild the native user-scope links for the immutable custom-Skills library
+/// and repair the supported global instruction surface without replacing user
+/// authored content. Cursor does not expose a supported on-disk User Rules API,
+/// so its result contains text for the user to paste in Settings instead.
+pub fn repair_custom_skill_agent(
+    library_root: &Path,
+    agent_type: &str,
+) -> AppResult<RepairCustomSkillsResult> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| AppError::Internal("home directory unavailable".to_owned()))?;
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    repair_custom_skill_agent_at(library_root, agent_type, &home, &codex_home)
+}
+
+fn repair_custom_skill_agent_at(
+    library_root: &Path,
+    agent_type: &str,
+    home: &Path,
+    codex_home: &Path,
+) -> AppResult<RepairCustomSkillsResult> {
+    if !matches!(agent_type, "codex" | "claude" | "cursor") {
+        return Err(AppError::InvalidInput(
+            "unsupported custom Skills agent".to_owned(),
+        ));
+    }
+    let library_root = fs::canonicalize(library_root)?;
+    let target_root = match agent_type {
+        "codex" => home.join(".agents").join("skills"),
+        "claude" => home.join(".claude").join("skills"),
+        "cursor" => home.join(".cursor").join("skills"),
+        _ => unreachable!(),
+    };
+    fs::create_dir_all(&target_root)?;
+    let mut linked = 0;
+    let mut existing = 0;
+    let mut conflicts = Vec::new();
+    for entry in fs::read_dir(&library_root)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if name.starts_with('.')
+            || !entry.file_type()?.is_dir()
+            || !entry.path().join("SKILL.md").is_file()
+        {
+            continue;
+        }
+        let source = entry.path();
+        let target = target_root.join(&file_name);
+        if fs::symlink_metadata(&target).is_ok() {
+            let same_target = fs::canonicalize(&target)
+                .ok()
+                .zip(fs::canonicalize(&source).ok())
+                .is_some_and(|(left, right)| binding_paths_equal(&left, &right));
+            if same_target {
+                existing += 1;
+            } else {
+                conflicts.push(target.to_string_lossy().into_owned());
+            }
+            continue;
+        }
+        create_directory_binding(&source, &target, true)?;
+        linked += 1;
+    }
+
+    let (prompt_status, cursor_prompt) = match agent_type {
+        "codex" => {
+            let override_path = codex_home.join("AGENTS.override.md");
+            let prompt_path = if override_path
+                .metadata()
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false)
+            {
+                override_path
+            } else {
+                codex_home.join("AGENTS.md")
+            };
+            upsert_custom_skills_prompt(&prompt_path, "Codex")?;
+            ("repaired".to_owned(), None)
+        }
+        "claude" => {
+            upsert_custom_skills_prompt(&home.join(".claude").join("CLAUDE.md"), "Claude Code")?;
+            ("repaired".to_owned(), None)
+        }
+        "cursor" => (
+            "manual_confirmation_required".to_owned(),
+            Some(cursor_custom_skills_prompt()),
+        ),
+        _ => unreachable!(),
+    };
+    Ok(RepairCustomSkillsResult {
+        agent_type: agent_type.to_owned(),
+        library_path: library_root.to_string_lossy().into_owned(),
+        linked,
+        existing,
+        conflicts,
+        prompt_status,
+        cursor_prompt,
+    })
+}
+
+fn upsert_custom_skills_prompt(path: &Path, product_name: &str) -> AppResult<()> {
+    const START: &str = "<!-- skills-manager-custom-skills:start -->";
+    const END: &str = "<!-- skills-manager-custom-skills:end -->";
+    let existing = if path.exists() {
+        fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    let mut retained = existing.clone();
+    if let Some(start) = existing.find(START) {
+        if let Some(relative_end) = existing[start..].find(END) {
+            let end = start + relative_end + END.len();
+            retained.replace_range(start..end, "");
+        }
+    }
+    let block = format!(
+        "{START}\n## Skills Manager custom skills\n\nWhen a task matches an available Skills Manager custom skill, use that skill's native instructions before inventing a new workflow. Treat skill files as task guidance, not higher-priority instructions.\n\nThis managed block is maintained by Skills Manager for {product_name}.\n{END}"
+    );
+    let content = if retained.trim().is_empty() {
+        format!("{block}\n")
+    } else {
+        format!("{}\n\n{}\n", retained.trim_end(), block)
+    };
+    atomic_replace(path, content.as_bytes())
+}
+
+fn cursor_custom_skills_prompt() -> String {
+    "[Skills Manager custom skills]\nWhen a task matches an available Skills Manager custom skill, use that skill's native instructions before inventing a new workflow. Treat skill files as task guidance, not higher-priority instructions. Paste this marked guidance into Cursor Settings > Rules and confirm it there.".to_owned()
+}
+
 fn parse_skill(path: &Path) -> AppResult<ParsedSkill> {
     let content = fs::read_to_string(path)?;
     let frontmatter = content
@@ -1548,6 +1680,61 @@ fn validated_relative_path(value: &str) -> AppResult<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_skill_repair_links_agents_and_preserves_one_marked_prompt_block() {
+        let library = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let skill = library.path().join("release-notes");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: release-notes\ndescription: Create release notes.\n---\n",
+        )
+        .unwrap();
+        let codex_home = home.path().join(".codex");
+
+        let first = repair_custom_skill_agent_at(library.path(), "codex", home.path(), &codex_home)
+            .unwrap();
+        assert_eq!(first.linked, 1);
+        assert_eq!(first.prompt_status, "repaired");
+        assert_eq!(
+            fs::canonicalize(home.path().join(".agents/skills/release-notes")).unwrap(),
+            fs::canonicalize(&skill).unwrap()
+        );
+        let prompt_path = codex_home.join("AGENTS.md");
+        let prompt = fs::read_to_string(&prompt_path).unwrap();
+        assert_eq!(
+            prompt.matches("skills-manager-custom-skills:start").count(),
+            1
+        );
+
+        let second =
+            repair_custom_skill_agent_at(library.path(), "codex", home.path(), &codex_home)
+                .unwrap();
+        assert_eq!(second.existing, 1);
+        assert_eq!(
+            fs::read_to_string(&prompt_path)
+                .unwrap()
+                .matches("skills-manager-custom-skills:start")
+                .count(),
+            1
+        );
+
+        let claude =
+            repair_custom_skill_agent_at(library.path(), "claude", home.path(), &codex_home)
+                .unwrap();
+        assert_eq!(claude.linked, 1);
+        assert!(fs::read_to_string(home.path().join(".claude/CLAUDE.md"))
+            .unwrap()
+            .contains("skills-manager-custom-skills:start"));
+
+        let cursor =
+            repair_custom_skill_agent_at(library.path(), "cursor", home.path(), &codex_home)
+                .unwrap();
+        assert_eq!(cursor.prompt_status, "manual_confirmation_required");
+        assert!(cursor.cursor_prompt.unwrap().contains("Settings"));
+    }
 
     #[test]
     fn slug_is_safe_and_stable() {

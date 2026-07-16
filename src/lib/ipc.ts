@@ -8,13 +8,24 @@ import type {
   AiProviderTestResult,
   AuditLogEntry,
   CapabilityInfo,
+  AnswerCustomSkillQuestionRequest,
   ClearSkillDescriptionRequest,
+  CustomSkillRun,
+  CustomSkillsSettings,
+  GenerateCustomSkillRequest,
   GenerateSkillDescriptionRequest,
   ImportSkillRequest,
   ImportSkillResult,
   LocalAiProvider,
   Project,
+  OpenApiSearchProfile,
+  RepairCustomSkillsRequest,
+  RepairCustomSkillsResult,
+  SaveCustomSkillRequest,
+  SaveCustomSkillResult,
+  SaveOpenApiSearchProfileRequest,
   SessionDetail,
+  RenameSessionRequest,
   SessionSearchRequest,
   SessionSummary,
   SecurityScanResult,
@@ -26,7 +37,9 @@ import type {
   SkillDetail,
   SkillScanRequest,
   SkillSummary,
+  StartCustomSkillRunRequest,
   UpdateAiDescriptionSettingsRequest,
+  UpdateCustomSkillsSettingsRequest,
   WriteSkillFileRequest,
   WriteSkillFileResult,
 } from "../types";
@@ -106,6 +119,12 @@ let mockAiSettings: AiDescriptionSettings = {
 };
 let mockOpenAiSecretConfigured = false;
 let mockCompatibleSecretConfigured = false;
+let mockCustomSkillsSettings: CustomSkillsSettings = {
+  libraryPath: "C:\\Program Files\\Skills Manager\\custome skills",
+  allowRemoteSessionContext: false,
+};
+let mockSearchProfiles: OpenApiSearchProfile[] = [];
+const mockCustomSkillRuns = new Map<string, CustomSkillRun>();
 const mockLocalizations = new Map<string, SkillDescriptionLocalization>();
 const mockDescriptionJobs = new Map<
   string,
@@ -175,6 +194,9 @@ const mockSessions: SessionSummary[] = [
     updatedAt: now - 280,
     archived: false,
     sourceKind: "codex",
+    agentType: "codex",
+    titleOrigin: "native",
+    canRename: true,
     matchRanges: [],
   },
   {
@@ -185,7 +207,10 @@ const mockSessions: SessionSummary[] = [
     createdAt: now - 86400,
     updatedAt: now - 1780,
     archived: false,
-    sourceKind: "codex",
+    sourceKind: "claude",
+    agentType: "claude",
+    titleOrigin: "native",
+    canRename: true,
     matchRanges: [],
   },
   {
@@ -196,7 +221,10 @@ const mockSessions: SessionSummary[] = [
     createdAt: now - 86400 * 3,
     updatedAt: now - 9100,
     archived: false,
-    sourceKind: "codex",
+    sourceKind: "cursor",
+    agentType: "cursor",
+    titleOrigin: "native",
+    canRename: true,
     matchRanges: [],
   },
   {
@@ -208,6 +236,9 @@ const mockSessions: SessionSummary[] = [
     updatedAt: now - 86400 * 2,
     archived: false,
     sourceKind: "codex",
+    agentType: "codex",
+    titleOrigin: "derived",
+    canRename: true,
     matchRanges: [],
   },
   {
@@ -218,7 +249,10 @@ const mockSessions: SessionSummary[] = [
     createdAt: now - 86400 * 10,
     updatedAt: now - 86400 * 6,
     archived: true,
-    sourceKind: "codex",
+    sourceKind: "claude",
+    agentType: "claude",
+    titleOrigin: "derived",
+    canRename: true,
     matchRanges: [],
   },
   {
@@ -229,7 +263,10 @@ const mockSessions: SessionSummary[] = [
     createdAt: now - 86400 * 20,
     updatedAt: now - 86400 * 12,
     archived: true,
-    sourceKind: "codex",
+    sourceKind: "cursor",
+    agentType: "cursor",
+    titleOrigin: "derived",
+    canRename: true,
     matchRanges: [],
   },
 ];
@@ -766,9 +803,25 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       return {
         summary,
         content: mockSessionContent[summary.id] ?? summary.preview,
-        filePath: `C:\\Users\\ExampleUser\\.codex\\sessions\\2026\\07\\${summary.id}.jsonl`,
+        filePath: summary.agentType === "claude"
+          ? `C:\\Users\\ExampleUser\\.claude\\projects\\demo\\${summary.id}.jsonl`
+          : summary.agentType === "cursor"
+            ? `C:\\Users\\ExampleUser\\AppData\\Roaming\\Cursor\\User\\globalStorage\\state.vscdb#${summary.id}`
+            : `C:\\Users\\ExampleUser\\.codex\\sessions\\2026\\07\\${summary.id}.jsonl`,
         metadata: { model: "gpt-5", cwd: summary.cwd, source: "local" },
       } as T;
+    }
+    case "rename_session": {
+      const request = (args?.request ?? {}) as RenameSessionRequest;
+      const title = request.title.trim();
+      if (!title) throw new Error("会话名称不能为空");
+      const summary = mockSessions.find((session) => session.id === request.id);
+      if (!summary) throw new Error("会话不存在或已被移动");
+      summary.title = title;
+      summary.titleOrigin = "native";
+      summary.updatedAt = Math.floor(Date.now() / 1000);
+      recordMockAudit("SESSION_RENAME", summary.id, { agent: summary.agentType, titleLength: title.length });
+      return { ...summary } as T;
     }
     case "scan_skills": {
       await sleep(360);
@@ -1233,6 +1286,130 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       }
       return { ...state.job, failures: [...state.job.failures] } as T;
     }
+    case "get_custom_skills_settings":
+      return { ...mockCustomSkillsSettings } as T;
+    case "update_custom_skills_settings": {
+      const request = (args?.request ?? {}) as UpdateCustomSkillsSettingsRequest;
+      mockCustomSkillsSettings = {
+        ...mockCustomSkillsSettings,
+        allowRemoteSessionContext: Boolean(request.allowRemoteSessionContext),
+      };
+      recordMockAudit("CUSTOM_SKILLS_SETTINGS", null, { remoteSessionContext: mockCustomSkillsSettings.allowRemoteSessionContext });
+      return { ...mockCustomSkillsSettings } as T;
+    }
+    case "list_openapi_search_profiles":
+      return mockSearchProfiles.map((profile) => ({ ...profile })) as T;
+    case "save_openapi_search_profile": {
+      const request = (args?.request ?? {}) as SaveOpenApiSearchProfileRequest;
+      if (!request.name.trim() || !request.operationId.trim() || !request.queryParameter.trim()) {
+        throw new DesktopApiError("请填写名称、operationId 和查询参数", "INVALID_INPUT");
+      }
+      if (!request.specification.includes("openapi")) {
+        throw new DesktopApiError("仅支持 OpenAPI 3.x JSON 描述", "INVALID_INPUT");
+      }
+      const id = request.id ?? `search-profile-${Date.now().toString(36)}`;
+      const profile: OpenApiSearchProfile = {
+        id,
+        name: request.name.trim(),
+        operationId: request.operationId.trim(),
+        queryParameter: request.queryParameter.trim(),
+        resultsPointer: request.resultsPointer.trim() || "/items",
+        endpointHost: "configured-api.example",
+        enabled: request.enabled,
+        apiKeyConfigured: Boolean(request.apiKey?.trim()),
+        createdAt: now,
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      mockSearchProfiles = [profile, ...mockSearchProfiles.filter((candidate) => candidate.id !== id)];
+      recordMockAudit("OPENAPI_SEARCH_PROFILE_SAVE", id, { enabled: profile.enabled });
+      return profile as T;
+    }
+    case "start_custom_skill_run": {
+      const request = (args?.request ?? {}) as StartCustomSkillRunRequest;
+      if (!request.prompt.trim()) throw new DesktopApiError("请先描述你要创建的 Skill", "INVALID_INPUT");
+      const id = `custom-skill-${Date.now().toString(36)}`;
+      const run: CustomSkillRun = {
+        id,
+        status: "interview",
+        prompt: request.prompt.trim(),
+        question: { id: "trigger", prompt: "在什么场景或用户表述下应触发这个 Skill？", required: true },
+        requirements: [{ id: "goal", label: "目标", value: request.prompt.trim() }],
+        selectedSessionIds: [...new Set(request.sessionIds)],
+        sessionEvidence: request.sessionIds.map((sessionId) => ({
+          sessionId,
+          title: mockSessions.find((session) => session.id === sessionId)?.title ?? sessionId,
+          contentHash: `sha256:${sessionId}`,
+          excerpt: (mockSessionContent[sessionId] ?? "").slice(0, 420),
+          sourcePosition: "session excerpt",
+        })),
+        webCandidates: [],
+        files: [],
+        validation: null,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      mockCustomSkillRuns.set(id, run);
+      return { ...run } as T;
+    }
+    case "answer_custom_skill_question": {
+      const request = (args?.request ?? {}) as AnswerCustomSkillQuestionRequest;
+      const run = mockCustomSkillRuns.get(request.runId);
+      if (!run?.question) throw new DesktopApiError("当前生成任务不在追问阶段", "CONFLICT");
+      if (!request.answer.trim()) throw new DesktopApiError("请填写回答", "INVALID_INPUT");
+      run.requirements.push({ id: run.question.id, label: run.question.id, value: request.answer.trim() });
+      const next = ["inputs", "outputs", "constraints"].find((id) => !run.requirements.some((item) => item.id === id));
+      run.question = next ? {
+        id: next,
+        prompt: next === "inputs" ? "它需要哪些输入、业务数据或前置条件？" : next === "outputs" ? "它应交付什么具体结果或文件？" : "有哪些必须遵守的限制、禁止项或验收标准？",
+        required: true,
+      } : null;
+      run.status = run.question ? "interview" : "ready";
+      run.updatedAt = Math.floor(Date.now() / 1000);
+      return { ...run } as T;
+    }
+    case "generate_custom_skill": {
+      const request = (args?.request ?? {}) as GenerateCustomSkillRequest;
+      const run = mockCustomSkillRuns.get(request.runId);
+      if (!run || run.status !== "ready") throw new DesktopApiError("请先完成全部追问", "CONFLICT");
+      const name = "custom-workflow";
+      const evidenceNote = run.sessionEvidence.length
+        ? "\n\n## Session evidence\n\nUse the selected session facts as the source of truth; do not replace them with web results."
+        : "";
+      run.files = [
+        { path: "SKILL.md", content: `---\nname: ${name}\ndescription: ${run.prompt.slice(0, 100)}\n---\n\n# Custom Workflow\n\nFollow the agreed trigger, inputs, outputs, and constraints.\n\n1. Check the user request against the requirements ledger.\n2. Produce the requested deliverable and verify constraints.\n3. State missing information instead of inventing business facts.${evidenceNote}\n` },
+        { path: "agents/openai.yaml", content: "interface:\n  display_name: Custom Workflow\n  short_description: Guided custom workflow\n" },
+      ];
+      run.webCandidates = run.selectedSessionIds.length ? [] : [{ title: "Reference workflow pattern", url: "https://example.com/workflow", summary: "Untrusted structural reference only.", license: "Unknown", source: "configured OpenAPI search", selected: true }];
+      run.validation = { status: "passed", structuralStatus: "passed", securityStatus: "safe", semanticStatus: "passed", issues: [], checkedAt: Math.floor(Date.now() / 1000) };
+      run.status = "generated";
+      return { ...run } as T;
+    }
+    case "validate_custom_skill_run": {
+      const run = mockCustomSkillRuns.get(String(args?.runId ?? ""));
+      if (!run?.files.length) throw new DesktopApiError("请先生成 Skill", "CONFLICT");
+      run.validation = { status: "passed", structuralStatus: "passed", securityStatus: "safe", semanticStatus: "passed", issues: [], checkedAt: Math.floor(Date.now() / 1000) };
+      return { ...run } as T;
+    }
+    case "save_custom_skill": {
+      const request = (args?.request ?? {}) as SaveCustomSkillRequest;
+      const run = mockCustomSkillRuns.get(request.runId);
+      if (!run?.validation || !run.files.length) throw new DesktopApiError("请先生成并校验 Skill", "CONFLICT");
+      run.status = run.validation.status === "passed" ? "saved" : "overridden";
+      const result: SaveCustomSkillResult = { path: `${mockCustomSkillsSettings.libraryPath}\\custom-workflow`, name: "custom-workflow", validationStatus: run.status === "overridden" ? "overridden" : "passed" };
+      recordMockAudit("CUSTOM_SKILL_SAVE", run.id, { validationStatus: result.validationStatus });
+      return result as T;
+    }
+    case "get_custom_skill_run": {
+      const run = mockCustomSkillRuns.get(String(args?.id ?? ""));
+      if (!run) throw new DesktopApiError("自定义 Skill 任务不存在", "NOT_FOUND");
+      return { ...run } as T;
+    }
+    case "repair_custom_skills": {
+      const request = (args?.request ?? {}) as RepairCustomSkillsRequest;
+      const result: RepairCustomSkillsResult = { agentType: request.agentType, libraryPath: mockCustomSkillsSettings.libraryPath, linked: mockCustomSkillRuns.size ? 1 : 0, existing: 0, conflicts: [], promptStatus: request.agentType === "cursor" ? "manual_confirmation_required" : "updated", cursorPrompt: request.agentType === "cursor" ? "[Skills Manager custom skills]\nWhen a task matches an available Skills Manager custom skill, use that skill's native instructions before inventing a new workflow." : null };
+      recordMockAudit("CUSTOM_SKILLS_REPAIR", request.agentType, { promptStatus: result.promptStatus });
+      return result as T;
+    }
     case "remove_managed_binding": {
       const locationId = String(args?.locationId ?? "");
       const index = mockSkills.findIndex((candidate) => candidate.id === locationId);
@@ -1300,6 +1477,8 @@ export const desktopApi = {
   searchSessions: (request: SessionSearchRequest) =>
     call<SessionSummary[]>("search_sessions", { request }),
   getSession: (id: string) => call<SessionDetail>("get_session", { id }),
+  renameSession: (request: RenameSessionRequest) =>
+    call<SessionSummary>("rename_session", { request }),
   scanSkills: (request: SkillScanRequest) =>
     call<SkillSummary[]>("scan_skills", { request }),
   getSkill: (id: string) => call<SkillDetail>("get_skill", { id }),
@@ -1344,6 +1523,28 @@ export const desktopApi = {
     call<SkillDescriptionJob | null>("get_skill_description_job", { jobId }),
   cancelSkillDescriptionJob: (jobId: string) =>
     call<SkillDescriptionJob>("cancel_skill_description_job", { jobId }),
+  getCustomSkillsSettings: () =>
+    call<CustomSkillsSettings>("get_custom_skills_settings"),
+  updateCustomSkillsSettings: (request: UpdateCustomSkillsSettingsRequest) =>
+    call<CustomSkillsSettings>("update_custom_skills_settings", { request }),
+  listOpenApiSearchProfiles: () =>
+    call<OpenApiSearchProfile[]>("list_openapi_search_profiles"),
+  saveOpenApiSearchProfile: (request: SaveOpenApiSearchProfileRequest) =>
+    call<OpenApiSearchProfile>("save_openapi_search_profile", { request }),
+  startCustomSkillRun: (request: StartCustomSkillRunRequest) =>
+    call<CustomSkillRun>("start_custom_skill_run", { request }),
+  answerCustomSkillQuestion: (request: AnswerCustomSkillQuestionRequest) =>
+    call<CustomSkillRun>("answer_custom_skill_question", { request }),
+  generateCustomSkill: (request: GenerateCustomSkillRequest) =>
+    call<CustomSkillRun>("generate_custom_skill", { request }),
+  validateCustomSkillRun: (runId: string) =>
+    call<CustomSkillRun>("validate_custom_skill_run", { runId }),
+  saveCustomSkill: (request: SaveCustomSkillRequest) =>
+    call<SaveCustomSkillResult>("save_custom_skill", { request }),
+  getCustomSkillRun: (id: string) =>
+    call<CustomSkillRun>("get_custom_skill_run", { id }),
+  repairCustomSkills: (request: RepairCustomSkillsRequest) =>
+    call<RepairCustomSkillsResult>("repair_custom_skills", { request }),
   listAuditLogs: (limit = 100) =>
     call<AuditLogEntry[]>("list_audit_logs", { limit }),
 };

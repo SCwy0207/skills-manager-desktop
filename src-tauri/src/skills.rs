@@ -20,6 +20,9 @@ use crate::{
     skill_descriptions,
 };
 
+#[cfg(not(test))]
+use crate::custom_skills;
+
 const MANIFEST_FILE_NAME: &str = "SKILL.md";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_READ_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -148,6 +151,24 @@ fn scan_skills_from(
 ) -> AppResult<Vec<SkillSummary>> {
     let projects = load_projects(database, &request.project_ids)?;
     let roots = build_skill_roots(home, codex_home, &projects, request.include_plugin_cache);
+    // Custom Skills live in the application library and are deliberately indexed
+    // as a first-class source. Their contents remain writable through the Custom
+    // Skills workflow, but the general scanner can preview and audit them.
+    #[cfg(not(test))]
+    let roots = {
+        let mut roots = roots;
+        roots.push(SkillRoot {
+            agent_type: "custom",
+            scope_kind: "library",
+            source_kind: "custom",
+            root: custom_skills::custom_library_root()?,
+            project_id: None,
+            read_only: false,
+            discovery_mode: DiscoveryMode::DirectChildren,
+            excluded_children: &[".staging"],
+        });
+        roots
+    };
     let managed_bindings = load_managed_bindings(database)?;
     let codex_enabled_overrides = load_codex_enabled_overrides(codex_home)?;
     let scan_token = Utc::now().timestamp();

@@ -1,7 +1,7 @@
 {
   "name": "skills-manager",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local-first desktop manager for Agent Skills across Codex, Claude Code and Cursor.",
   "author": "Victor Kuo",
   "license": "MIT",

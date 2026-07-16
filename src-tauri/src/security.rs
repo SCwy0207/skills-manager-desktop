@@ -284,6 +284,25 @@ pub fn scan_skill_security(
     Ok(result)
 }
 
+/// Scan a staged, not-yet-indexed generated Skill. This shares the exact same
+/// bounded traversal and detection rules as persisted Skills but deliberately
+/// does not write findings or metadata into SQLite.
+pub fn scan_skill_draft(root: &Path) -> AppResult<SecurityScanResult> {
+    let root = validate_scan_root(root)?;
+    let outcome = scan_tree(&root, ScanLimits::default())?;
+    Ok(SecurityScanResult {
+        location_id: "custom-skill-draft".to_owned(),
+        status: status_for_scan(&outcome).to_owned(),
+        findings: outcome.findings,
+        scanned_files: outcome.scanned_files,
+        scanned_bytes: outcome.scanned_bytes,
+        skipped_binary_files: outcome.skipped_binary_files,
+        skipped_oversized_files: outcome.skipped_oversized_files,
+        skipped_links: outcome.skipped_links,
+        scanned_at: Utc::now().timestamp(),
+    })
+}
+
 /// Loads the latest complete security-scan snapshot for a skill location.
 ///
 /// A location that has never completed a scan returns `None`. Findings are

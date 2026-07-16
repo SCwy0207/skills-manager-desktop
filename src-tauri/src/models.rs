@@ -36,7 +36,17 @@ pub struct SessionSummary {
     pub updated_at: i64,
     pub archived: bool,
     pub source_kind: String,
+    pub agent_type: String,
+    pub title_origin: String,
+    pub can_rename: bool,
     pub match_ranges: Vec<TextRange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionRequest {
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +186,200 @@ pub struct AuditLogEntry {
     pub result: String,
     pub detail: serde_json::Value,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillsSettings {
+    pub library_path: String,
+    pub allow_remote_session_context: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCustomSkillsSettingsRequest {
+    pub allow_remote_session_context: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenApiSearchProfile {
+    pub id: String,
+    pub name: String,
+    pub operation_id: String,
+    pub query_parameter: String,
+    pub results_pointer: String,
+    pub endpoint_host: String,
+    pub enabled: bool,
+    pub api_key_configured: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveOpenApiSearchProfileRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    /// The JSON OpenAPI 3.x document. It is kept locally and is never sent to
+    /// an AI provider.
+    pub specification: String,
+    pub operation_id: String,
+    pub query_parameter: String,
+    #[serde(default = "default_results_pointer")]
+    pub results_pointer: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillQuestion {
+    pub id: String,
+    pub prompt: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillRequirement {
+    pub id: String,
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEvidence {
+    pub session_id: String,
+    pub title: String,
+    pub content_hash: String,
+    pub excerpt: String,
+    pub source_position: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSkillCandidate {
+    pub title: String,
+    pub url: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    pub source: String,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillValidationIssue {
+    pub severity: String,
+    pub kind: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillValidation {
+    pub status: String,
+    pub structural_status: String,
+    pub security_status: String,
+    pub semantic_status: String,
+    pub issues: Vec<CustomSkillValidationIssue>,
+    pub checked_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSkillRun {
+    pub id: String,
+    pub status: String,
+    pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<CustomSkillQuestion>,
+    pub requirements: Vec<CustomSkillRequirement>,
+    pub selected_session_ids: Vec<String>,
+    pub session_evidence: Vec<SessionEvidence>,
+    pub web_candidates: Vec<WebSkillCandidate>,
+    pub files: Vec<CustomSkillFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation: Option<CustomSkillValidation>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartCustomSkillRunRequest {
+    pub prompt: String,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub use_web: bool,
+    #[serde(default)]
+    pub search_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnswerCustomSkillQuestionRequest {
+    pub run_id: String,
+    pub answer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateCustomSkillRequest {
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCustomSkillRequest {
+    pub run_id: String,
+    #[serde(default)]
+    pub override_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCustomSkillResult {
+    pub path: String,
+    pub name: String,
+    pub validation_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairCustomSkillsRequest {
+    pub agent_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairCustomSkillsResult {
+    pub agent_type: String,
+    pub library_path: String,
+    pub linked: usize,
+    pub existing: usize,
+    pub conflicts: Vec<String>,
+    pub prompt_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -348,6 +552,10 @@ pub struct SkillDescriptionJob {
 
 fn default_zh_cn() -> String {
     "zh-CN".to_owned()
+}
+
+fn default_results_pointer() -> String {
+    "/results".to_owned()
 }
 
 #[cfg(test)]
